@@ -17,6 +17,7 @@ export interface AgentConfig {
   allowedTools: string[];
   permissionMode: string;
   model: string;
+  systemPrompt?: string;
 }
 
 export interface EmojiConfig {

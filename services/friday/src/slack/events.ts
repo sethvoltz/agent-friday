@@ -2,6 +2,7 @@ import type { App } from "@slack/bolt";
 import type { WebClient } from "@slack/web-api";
 import type { RuntimeConfig } from "../config.js";
 import { sendToAgent, type AgentCallbacks } from "../agent/client.js";
+import { createSlackTools } from "../agent/tools.js";
 import { resetSession, getSessionId } from "../sessions/manager.js";
 import {
   getSessionStats,
@@ -281,6 +282,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       }
 
       try {
+        const slackMcp = createSlackTools(client);
         const agentOptions = {
           channelId,
           isOrchestrator,
@@ -293,6 +295,10 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 "Grep",
               ],
           model: config.agent.model,
+          mcpServers: isOrchestrator
+            ? { "friday-slack": slackMcp }
+            : undefined,
+          systemPrompt: buildSystemPrompt(config, isOrchestrator, channelId),
         };
 
         // Compaction status message — posted on start, updated on end
@@ -469,6 +475,39 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       await say({ text: chunks[i] });
     }
   }
+}
+
+function buildSystemPrompt(
+  config: RuntimeConfig,
+  isOrchestrator: boolean,
+  channelId: string
+): string | { type: "preset"; preset: "claude_code"; append: string } | undefined {
+  const agentConfig = isOrchestrator ? config.agent : config.independentAgent;
+  const customPrompt = agentConfig?.systemPrompt;
+
+  // Always inject channel context so the agent knows its channel_id for slack_reply
+  const channelContext = `You are communicating via Slack channel ${channelId}.`;
+
+  if (customPrompt) {
+    // Custom prompt: append to Claude Code's default
+    return {
+      type: "preset",
+      preset: "claude_code",
+      append: `${channelContext}\n\n${customPrompt}`,
+    };
+  }
+
+  if (isOrchestrator) {
+    // Orchestrator gets channel context even without a custom prompt
+    return {
+      type: "preset",
+      preset: "claude_code",
+      append: channelContext,
+    };
+  }
+
+  // Independent sessions with no custom prompt: no override
+  return undefined;
 }
 
 function chunkMessage(text: string, maxLength: number): string[] {

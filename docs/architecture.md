@@ -25,7 +25,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/config.ts` | Loads `~/.friday/config.json` + `~/.friday/.env`, validates required fields, merges with defaults |
 | `src/slack/app.ts` | Creates `@slack/bolt` App with Socket Mode |
 | `src/slack/events.ts` | Message handler, `/friday` commands, per-channel FIFO queue, streaming, compaction detection |
-| `src/agent/client.ts` | Wraps Agent SDK `query()`, streams text chunks, detects compaction, logs usage |
+| `src/agent/client.ts` | Wraps Agent SDK `query()`, streams text chunks, detects compaction, logs usage, passes MCP servers and system prompt |
+| `src/agent/tools.ts` | MCP tool definitions (`slack_reply`) injected into agent sessions via `createSdkMcpServer` |
 | `src/sessions/manager.ts` | Channel → session ID mapping (in-memory + persisted to `~/.friday/sessions/channels.json`) |
 | `src/sessions/queue.ts` | Per-channel FIFO queue with edit/delete support, emoji lifecycle helpers |
 | `src/monitor/usage.ts` | Appends per-turn usage entries to `~/.friday/usage.jsonl` |
@@ -37,6 +38,10 @@ TypeScript types and utilities shared across services:
 
 - `config.ts` — `FridayConfig` type, default values, `loadConfig()` function, path constants
 - `usage.ts` — `UsageEntry` type for the JSONL usage log
+
+### Usage Report (`tools/usage-report`)
+
+Standalone CLI tool that reads `~/.friday/usage.jsonl` and reports usage stats without making any LLM calls. Run via `pnpm --filter @friday/usage-report run start` (or `-- -v` for token breakdown).
 
 ### Dashboard (`services/dashboard`)
 

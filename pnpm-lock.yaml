@@ -69,6 +69,22 @@ importers:
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
+      zod:
+        specifier: ^4.0.0
+        version: 4.3.6
+    devDependencies:
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
+  tools/usage-report:
+    dependencies:
+      '@friday/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
     devDependencies:
       tsx:
         specifier: ^4.19.0

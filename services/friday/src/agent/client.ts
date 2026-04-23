@@ -8,6 +8,8 @@ export interface AgentOptions {
   workingDirectory: string;
   allowedTools: string[];
   model: string;
+  mcpServers?: Record<string, any>;
+  systemPrompt?: string | { type: "preset"; preset: "claude_code"; append?: string };
 }
 
 // Track turn count per session for usage logging
@@ -46,6 +48,14 @@ export async function sendToAgent(
     model: options.model,
     permissionMode: "bypassPermissions",
   };
+
+  if (options.mcpServers) {
+    queryOptions.mcpServers = options.mcpServers;
+  }
+
+  if (options.systemPrompt) {
+    queryOptions.systemPrompt = options.systemPrompt;
+  }
 
   if (existingSessionId) {
     queryOptions.resume = existingSessionId;

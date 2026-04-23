@@ -155,3 +155,40 @@
 - Handles SIGTERM/SIGINT for graceful shutdown
 - Non-zero exit on unrecoverable error
 - Process manager handles restart, log routing, boot start
+
+---
+
+## ADR-009: SDK MCP Server for Agent-to-Slack Communication
+
+**Date:** 2026-04-22
+**Status:** Accepted
+
+**Context:** The agent needs to proactively post messages to Slack (status updates, progress reports) without waiting for a turn to complete. The Agent SDK supports injecting MCP servers via `mcpServers` in query options.
+
+**Decision:** Use `createSdkMcpServer()` from the Agent SDK to define in-process MCP tools. The `slack_reply` tool receives the Slack `WebClient` instance via closure and posts messages directly.
+
+**Rationale:**
+- In-process MCP (SDK type) — no subprocess or network hop, the tool handler runs in the same Node process as the daemon
+- The `tool()` helper provides typed schemas via Zod, matching the SDK's expected interface
+- MCP servers are passed per-query, so we can give the orchestrator `slack_reply` while keeping independent sessions restricted
+- The agent receives the channel ID via system prompt injection, so it knows where to post
+
+**Consequences:**
+- MCP tools are recreated each turn (stateless by design — the `WebClient` is the only state, shared via closure)
+- Only the orchestrator session gets the `friday-slack` MCP server; independent sessions have no Slack tools
+
+---
+
+## ADR-010: Configurable System Prompt via Config
+
+**Date:** 2026-04-22
+**Status:** Accepted
+
+**Context:** The orchestrator's behavior (skills, personality, instructions) needs to be configurable without code changes. The Agent SDK supports `systemPrompt` as a string or preset-with-append.
+
+**Decision:** Add optional `systemPrompt` field to `AgentConfig` in `~/.friday/config.json`. When set, it's appended to the Claude Code default preset. Channel context (channel ID) is always injected.
+
+**Rationale:**
+- Appending to the default preset (`{ type: 'preset', preset: 'claude_code', append: ... }`) preserves Claude Code's built-in capabilities (tools, memory, CLAUDE.md loading) while adding custom instructions
+- The orchestrator skill can be loaded purely via config — no code deployment needed to change agent behavior
+- Channel ID injection in the system prompt lets the agent use `slack_reply` without being told which channel to target
