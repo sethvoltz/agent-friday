@@ -30,6 +30,7 @@ export interface EmojiConfig {
 export interface SlackFormattingConfig {
   maxMessageLength: number;
   streamingEnabled: boolean;
+  thinkingIndicatorDelaySec: number;
   emojiReactions: EmojiConfig;
 }
 
@@ -63,6 +64,7 @@ const DEFAULT_CONFIG: FridayConfig = {
   slack_formatting: {
     maxMessageLength: 4000,
     streamingEnabled: true,
+    thinkingIndicatorDelaySec: 30,
     emojiReactions: {
       processing: "eyes",
       queued: "clock1",

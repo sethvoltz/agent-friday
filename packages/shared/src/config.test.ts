@@ -42,7 +42,22 @@ describe("loadConfig", () => {
     expect(config.agent.allowedTools).toContain("Read");
     expect(config.slack_formatting.maxMessageLength).toBe(4000);
     expect(config.slack_formatting.streamingEnabled).toBe(true);
+    expect(config.slack_formatting.thinkingIndicatorDelaySec).toBe(30);
     expect(config.monitoring.warnAtPercentOfDailyLimit).toBe(80);
+  });
+
+  it("allows overriding thinkingIndicatorDelaySec", () => {
+    writeFileSync(
+      join(fridayDir, "config.json"),
+      JSON.stringify({
+        slack_formatting: { thinkingIndicatorDelaySec: 10 },
+      })
+    );
+    const config = loadConfig();
+    expect(config.slack_formatting.thinkingIndicatorDelaySec).toBe(10);
+    // Other defaults preserved
+    expect(config.slack_formatting.maxMessageLength).toBe(4000);
+    expect(config.slack_formatting.streamingEnabled).toBe(true);
   });
 
   it("deep-merges user config — overriding one agent field preserves siblings", () => {

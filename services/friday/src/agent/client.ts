@@ -9,6 +9,7 @@ export interface AgentOptions {
   workingDirectory: string;
   allowedTools: string[];
   model: string;
+  thinkingIndicatorDelaySec?: number;
   mcpServers?: Record<string, any>;
   systemPrompt?: string | { type: "preset"; preset: "claude_code"; append?: string };
 }
@@ -20,6 +21,9 @@ export interface AgentCallbacks {
   onChunk?: (text: string) => void;
   onCompactStart?: () => void;
   onCompactEnd?: (result: "success" | "failed") => void;
+  onThinkingStart?: (elapsedSec: number) => void;
+  onThinkingTick?: (elapsedSec: number) => void;
+  onThinkingEnd?: () => void;
 }
 
 /**
@@ -39,6 +43,38 @@ export async function sendToAgent(
       : callbacksOrOnChunk ?? {};
   let responseText = "";
   const startTime = Date.now();
+
+  // Thinking indicator timer — fires after thinkingDelaySec, ticks on each interval
+  const thinkingDelaySec = options.thinkingIndicatorDelaySec ?? 30;
+  const thinkingDelayMs = thinkingDelaySec * 1000;
+  let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+  let thinkingStarted = false;
+  let thinkingPaused = false;
+  let contentReceived = false;
+
+  function clearThinkingTimer() {
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer);
+      thinkingTimer = null;
+    }
+    if (thinkingStarted && !contentReceived) {
+      contentReceived = true;
+      callbacks.onThinkingEnd?.();
+    }
+  }
+
+  if (callbacks.onThinkingStart) {
+    thinkingTimer = setInterval(() => {
+      if (thinkingPaused || contentReceived) return;
+      const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+      if (!thinkingStarted) {
+        thinkingStarted = true;
+        callbacks.onThinkingStart!(elapsedSec);
+      } else {
+        callbacks.onThinkingTick?.(elapsedSec);
+      }
+    }, thinkingDelayMs);
+  }
 
   // Resume existing session for this channel, or start fresh
   const existingSessionId = getSessionId(options.channelId);
@@ -62,91 +98,105 @@ export async function sendToAgent(
     queryOptions.resume = existingSessionId;
   }
 
-  for await (const message of query({
-    prompt,
-    options: queryOptions,
-  })) {
-    if (message.type === "assistant") {
-      const text = message.message.content
-        .filter((block: any) => block.type === "text")
-        .map((block: any) => block.text)
-        .join("");
-      responseText += text;
-      if (text && callbacks.onChunk) {
-        callbacks.onChunk(text);
+  try {
+    for await (const message of query({
+      prompt,
+      options: queryOptions,
+    })) {
+      if (message.type === "assistant") {
+        const text = message.message.content
+          .filter((block: any) => block.type === "text")
+          .map((block: any) => block.text)
+          .join("");
+        responseText += text;
+        if (text) {
+          // First real content — clear thinking indicator
+          if (!contentReceived) {
+            contentReceived = true;
+            if (thinkingStarted) {
+              callbacks.onThinkingEnd?.();
+            }
+            clearThinkingTimer();
+          }
+          callbacks.onChunk?.(text);
+        }
+      }
+
+      // Detect compaction status changes — pause thinking during compaction
+      if (
+        message.type === "system" &&
+        (message as any).subtype === "status"
+      ) {
+        const status = (message as any).status;
+        const compactResult = (message as any).compact_result;
+
+        if (status === "compacting") {
+          thinkingPaused = true;
+          callbacks.onCompactStart?.();
+        }
+        if (compactResult) {
+          thinkingPaused = false;
+          callbacks.onCompactEnd?.(compactResult);
+        }
+      }
+
+      if (message.type === "result") {
+        if (message.subtype !== "success") {
+          throw new Error(`Agent ended with status: ${message.subtype}`);
+        }
+
+        const sessionId = message.session_id;
+        setSessionId(options.channelId, sessionId);
+
+        // Track turn number
+        const turnNumber = (turnCounts.get(sessionId) ?? 0) + 1;
+        turnCounts.set(sessionId, turnNumber);
+
+        const usage = (message as any).usage;
+        const costUsd = (message as any).total_cost_usd ?? null;
+        const durationMs = Date.now() - startTime;
+
+        const inputTokens = usage?.input_tokens ?? 0;
+        const outputTokens = usage?.output_tokens ?? 0;
+        const cacheCreationTokens =
+          usage?.cache_creation_input_tokens ?? 0;
+        const cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
+
+        log("info", "agent_response", {
+          channelId: options.channelId,
+          sessionType: options.isOrchestrator
+            ? "orchestrator"
+            : "independent",
+          sessionId,
+          turnNumber,
+          costUsd,
+          inputTokens,
+          outputTokens,
+          cacheCreationTokens,
+          cacheReadTokens,
+          durationMs,
+        });
+
+        // Append to usage log file
+        logUsage({
+          timestamp: new Date().toISOString(),
+          channelId: options.channelId,
+          sessionType: options.isOrchestrator
+            ? "orchestrator"
+            : "independent",
+          sessionId,
+          costUsd,
+          inputTokens,
+          outputTokens,
+          cacheCreationTokens,
+          cacheReadTokens,
+          turnNumber,
+          durationMs,
+        });
       }
     }
-
-    // Detect compaction status changes
-    if (
-      message.type === "system" &&
-      (message as any).subtype === "status"
-    ) {
-      const status = (message as any).status;
-      const compactResult = (message as any).compact_result;
-
-      if (status === "compacting" && callbacks.onCompactStart) {
-        callbacks.onCompactStart();
-      }
-      if (compactResult && callbacks.onCompactEnd) {
-        callbacks.onCompactEnd(compactResult);
-      }
-    }
-
-    if (message.type === "result") {
-      if (message.subtype !== "success") {
-        throw new Error(`Agent ended with status: ${message.subtype}`);
-      }
-
-      const sessionId = message.session_id;
-      setSessionId(options.channelId, sessionId);
-
-      // Track turn number
-      const turnNumber = (turnCounts.get(sessionId) ?? 0) + 1;
-      turnCounts.set(sessionId, turnNumber);
-
-      const usage = (message as any).usage;
-      const costUsd = (message as any).total_cost_usd ?? null;
-      const durationMs = Date.now() - startTime;
-
-      const inputTokens = usage?.input_tokens ?? 0;
-      const outputTokens = usage?.output_tokens ?? 0;
-      const cacheCreationTokens =
-        usage?.cache_creation_input_tokens ?? 0;
-      const cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
-
-      log("info", "agent_response", {
-        channelId: options.channelId,
-        sessionType: options.isOrchestrator
-          ? "orchestrator"
-          : "independent",
-        sessionId,
-        turnNumber,
-        costUsd,
-        inputTokens,
-        outputTokens,
-        cacheCreationTokens,
-        cacheReadTokens,
-        durationMs,
-      });
-
-      // Append to usage log file
-      logUsage({
-        timestamp: new Date().toISOString(),
-        channelId: options.channelId,
-        sessionType: options.isOrchestrator
-          ? "orchestrator"
-          : "independent",
-        sessionId,
-        costUsd,
-        inputTokens,
-        outputTokens,
-        cacheCreationTokens,
-        cacheReadTokens,
-        turnNumber,
-        durationMs,
-      });
-    }
+  } finally {
+    clearThinkingTimer();
   }
 
   return responseText || "(No response from agent)";

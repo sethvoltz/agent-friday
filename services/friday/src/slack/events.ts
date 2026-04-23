@@ -264,6 +264,9 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         placeholderTs = placeholderRes.ts!;
       }
 
+      // Thinking indicator message — declared outside try so catch can clean up
+      let thinkingMsgTs: string | null = null;
+
       try {
         const slackMcp = createSlackTools(client);
         const agentOptions = {
@@ -278,15 +281,52 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 "Grep",
               ],
           model: config.agent.model,
+          thinkingIndicatorDelaySec:
+            config.slack_formatting.thinkingIndicatorDelaySec,
           mcpServers: isOrchestrator
             ? { "friday-slack": slackMcp }
             : undefined,
           systemPrompt: buildSystemPrompt(config, isOrchestrator, channelId),
         };
 
+        // Thinking indicator — posted when agent takes too long, deleted on first content
+        const thinkingCallbacks: AgentCallbacks = {
+          onThinkingStart: (elapsedSec) => {
+            client.chat
+              .postMessage({
+                channel: channelId,
+                text: `_Still thinking... (${elapsedSec}s)_`,
+              })
+              .then((res) => {
+                thinkingMsgTs = res.ts ?? null;
+              })
+              .catch(() => {});
+          },
+          onThinkingTick: (elapsedSec) => {
+            if (thinkingMsgTs) {
+              client.chat
+                .update({
+                  channel: channelId,
+                  ts: thinkingMsgTs,
+                  text: `_Still thinking... (${elapsedSec}s)_`,
+                })
+                .catch(() => {});
+            }
+          },
+          onThinkingEnd: () => {
+            if (thinkingMsgTs) {
+              client.chat
+                .delete({ channel: channelId, ts: thinkingMsgTs })
+                .catch(() => {});
+              thinkingMsgTs = null;
+            }
+          },
+        };
+
         // Compaction status message — posted on start, updated on end
         let compactMsgTs: string | null = null;
-        const compactionCallbacks: AgentCallbacks = {
+        const agentCallbacks: AgentCallbacks = {
+          ...thinkingCallbacks,
           onCompactStart: () => {
             client.chat
               .postMessage({
@@ -334,13 +374,13 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
             say,
             streamTs,
             maxLen,
-            compactionCallbacks
+            agentCallbacks
           );
         } else {
           const response = await sendToAgent(
             prompt,
             agentOptions,
-            compactionCallbacks
+            agentCallbacks
           );
           const chunks = chunkMessage(response, maxLen);
 
@@ -358,6 +398,15 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           }
         }
       } catch (err) {
+        // Clean up thinking indicator on error (belt-and-suspenders — sendToAgent's
+        // finally block handles the normal case, but this covers edge cases)
+        if (thinkingMsgTs) {
+          client.chat
+            .delete({ channel: channelId, ts: thinkingMsgTs })
+            .catch(() => {});
+          thinkingMsgTs = null;
+        }
+
         const errorMessage =
           err instanceof Error ? err.message : "Unknown error";
         log("error", "agent_error", { channelId, error: errorMessage });
