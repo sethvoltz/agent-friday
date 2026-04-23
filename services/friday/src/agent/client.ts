@@ -1,6 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { getSessionId, setSessionId } from "../sessions/manager.js";
 import { logUsage } from "../monitor/usage.js";
+import { log } from "../log.js";
 
 export interface AgentOptions {
   channelId: string;
@@ -114,24 +115,20 @@ export async function sendToAgent(
         usage?.cache_creation_input_tokens ?? 0;
       const cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
 
-      // Log to stdout
-      console.log(
-        JSON.stringify({
-          event: "agent_response",
-          channelId: options.channelId,
-          sessionType: options.isOrchestrator
-            ? "orchestrator"
-            : "independent",
-          sessionId,
-          turnNumber,
-          costUsd,
-          inputTokens,
-          outputTokens,
-          cacheCreationTokens,
-          cacheReadTokens,
-          durationMs,
-        })
-      );
+      log("info", "agent_response", {
+        channelId: options.channelId,
+        sessionType: options.isOrchestrator
+          ? "orchestrator"
+          : "independent",
+        sessionId,
+        turnNumber,
+        costUsd,
+        inputTokens,
+        outputTokens,
+        cacheCreationTokens,
+        cacheReadTokens,
+        durationMs,
+      });
 
       // Append to usage log file
       logUsage({

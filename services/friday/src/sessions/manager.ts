@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { SESSIONS_DIR } from "@friday/shared";
 import { join } from "node:path";
+import { log } from "../log.js";
 
 const CHANNELS_FILE = join(SESSIONS_DIR, "channels.json");
 
@@ -16,9 +17,9 @@ export function loadSessions(): void {
   }
   if (existsSync(CHANNELS_FILE)) {
     sessions = JSON.parse(readFileSync(CHANNELS_FILE, "utf-8"));
-    console.log(
-      `Loaded ${Object.keys(sessions).length} saved session(s)`
-    );
+    log("info", "sessions_loaded", {
+      count: Object.keys(sessions).length,
+    });
   }
 }
 

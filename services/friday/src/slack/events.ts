@@ -3,6 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import type { RuntimeConfig } from "../config.js";
 import { sendToAgent, type AgentCallbacks } from "../agent/client.js";
 import { createSlackTools } from "../agent/tools.js";
+import { log } from "../log.js";
 import { resetSession, getSessionId } from "../sessions/manager.js";
 import {
   getSessionStats,
@@ -132,13 +133,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       const newText = changed.message?.text;
 
       if (messageTs && newText && updateQueued(channelId, messageTs, newText)) {
-        console.log(
-          JSON.stringify({
-            event: "queued_message_edited",
-            channelId,
-            messageTs,
-          })
-        );
+        log("info", "queued_message_edited", { channelId, messageTs });
       }
     }
 
@@ -158,13 +153,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         } catch {
           // Message already deleted, reaction gone
         }
-        console.log(
-          JSON.stringify({
-            event: "queued_message_deleted",
-            channelId,
-            messageTs,
-          })
-        );
+        log("info", "queued_message_deleted", { channelId, messageTs });
       }
     }
   });
@@ -377,7 +366,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       } catch (err) {
         const errorMessage =
           err instanceof Error ? err.message : "Unknown error";
-        console.error("Agent error:", errorMessage);
+        log("error", "agent_error", { channelId, error: errorMessage });
 
         if (placeholderTs) {
           await client.chat.update({
