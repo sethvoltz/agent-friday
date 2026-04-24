@@ -1,142 +1,66 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import {
   loadConfig,
   CONFIG_PATH,
-  ENV_PATH,
   USAGE_LOG_PATH,
   SESSIONS_DIR,
   AGENTS_PATH,
   FRIDAY_DIR,
+  resolveTranscriptPath,
   type UsageEntry,
   type AgentRegistry,
+  type RegistryEntry,
 } from "@friday/shared";
 import { listEntries, type MemoryEntry } from "@friday/memory";
 import { join } from "node:path";
 import type { PageServerLoad } from "./$types";
 
-const NAMES_CACHE_PATH = join(FRIDAY_DIR, "slack-names.json");
+/** Estimate cost from transcript JSONL token counts when usage.jsonl has no data */
+function estimateCostFromTranscript(
+  entry: RegistryEntry,
+  sessionId: string,
+  cwdOverride?: string,
+): number {
+  const lookupEntry = { ...entry, sessionId };
+  const jsonlPath = resolveTranscriptPath(lookupEntry, cwdOverride);
+  if (!jsonlPath || !existsSync(jsonlPath)) return 0;
 
-// ── Slack name resolution ────────────────────────────────────
-
-function loadBotToken(): string | null {
-  if (!existsSync(ENV_PATH)) return null;
-  const envContent = readFileSync(ENV_PATH, "utf-8");
-  const match = envContent.match(/^SLACK_BOT_TOKEN=(.+)$/m);
-  return match?.[1]?.trim() ?? null;
-}
-
-function loadNamesCache(): Record<string, string> {
-  if (!existsSync(NAMES_CACHE_PATH)) return {};
   try {
-    return JSON.parse(readFileSync(NAMES_CACHE_PATH, "utf-8"));
-  } catch {
-    return {};
-  }
-}
+    const content = readFileSync(jsonlPath, "utf-8");
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheCreation = 0;
+    let cacheRead = 0;
 
-function saveNamesCache(cache: Record<string, string>): void {
-  try {
-    writeFileSync(NAMES_CACHE_PATH, JSON.stringify(cache, null, 2));
-  } catch {
-    // Best effort
-  }
-}
-
-/**
- * Resolve Slack channel/DM IDs to human-readable names.
- * Uses a persistent file cache; only calls Slack API for unknown IDs.
- * Returns a map of channelId → display name ("#general", "@seth", etc.)
- */
-async function resolveSlackNames(
-  channelIds: string[],
-): Promise<Record<string, string>> {
-  const cache = loadNamesCache();
-  const unknown = channelIds.filter((id) => !cache[id]);
-
-  if (unknown.length === 0) return cache;
-
-  const token = loadBotToken();
-  if (!token) return cache;
-
-  let dirty = false;
-
-  for (const id of unknown) {
-    try {
-      if (id.startsWith("D")) {
-        // DM — get the conversation info to find the user
-        const convRes = await fetch("https://slack.com/api/conversations.info?" + new URLSearchParams({ channel: id }), {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const convData = await convRes.json() as any;
-        if (convData.ok && convData.channel?.user) {
-          // Resolve the user's display name
-          const userRes = await fetch("https://slack.com/api/users.info?" + new URLSearchParams({ user: convData.channel.user }), {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          const userData = await userRes.json() as any;
-          if (userData.ok) {
-            const name = userData.user?.profile?.display_name
-              || userData.user?.real_name
-              || userData.user?.name
-              || id;
-            cache[id] = `@${name}`;
-            dirty = true;
-          }
+    for (const line of content.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        const u = e?.message?.usage;
+        if (u) {
+          inputTokens += u.input_tokens ?? 0;
+          outputTokens += u.output_tokens ?? 0;
+          cacheCreation += u.cache_creation_input_tokens ?? 0;
+          cacheRead += u.cache_read_input_tokens ?? 0;
         }
-      } else {
-        // Channel or group
-        const res = await fetch("https://slack.com/api/conversations.info?" + new URLSearchParams({ channel: id }), {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json() as any;
-        if (data.ok && data.channel?.name) {
-          cache[id] = `#${data.channel.name}`;
-          dirty = true;
-        }
-      }
-    } catch {
-      // Skip — leave unresolved
+      } catch { /* skip */ }
     }
+
+    // Estimate using Sonnet pricing (most common model for builders)
+    // Input: $3/MTok, Output: $15/MTok, Cache write: $3.75/MTok, Cache read: $0.30/MTok
+    return (
+      (inputTokens * 3) / 1_000_000 +
+      (outputTokens * 15) / 1_000_000 +
+      (cacheCreation * 3.75) / 1_000_000 +
+      (cacheRead * 0.3) / 1_000_000
+    );
+  } catch {
+    return 0;
   }
-
-  if (dirty) saveNamesCache(cache);
-
-  return cache;
-}
-
-interface HealthData {
-  pid: number;
-  startedAt: string;
-  lastHeartbeat: string;
-  uptimeMs: number;
-}
-
-interface SessionEntry {
-  channelId: string;
-  sessionId: string;
 }
 
 export const load: PageServerLoad = async () => {
-  // Config
-  const configExists = existsSync(CONFIG_PATH);
   const config = loadConfig();
-
-  // Health
-  const healthPath = join(FRIDAY_DIR, "health.json");
-  let health: HealthData | null = null;
-  let daemonOnline = false;
-  if (existsSync(healthPath)) {
-    try {
-      health = JSON.parse(readFileSync(healthPath, "utf-8"));
-      // Consider online if heartbeat is < 60s old
-      if (health) {
-        const age = Date.now() - new Date(health.lastHeartbeat).getTime();
-        daemonOnline = age < 60_000;
-      }
-    } catch {
-      // Malformed
-    }
-  }
 
   // Usage entries
   const usageEntries: UsageEntry[] = [];
@@ -150,20 +74,6 @@ export const load: PageServerLoad = async () => {
       } catch {
         // skip
       }
-    }
-  }
-
-  // Sessions
-  const sessions: SessionEntry[] = [];
-  const channelsPath = join(SESSIONS_DIR, "channels.json");
-  if (existsSync(channelsPath)) {
-    try {
-      const raw = JSON.parse(readFileSync(channelsPath, "utf-8"));
-      for (const [channelId, sessionId] of Object.entries(raw)) {
-        sessions.push({ channelId, sessionId: sessionId as string });
-      }
-    } catch {
-      // skip
     }
   }
 
@@ -185,73 +95,81 @@ export const load: PageServerLoad = async () => {
     // Memory dir may not exist yet
   }
 
-  // Build sessionId → channelId mapping from all sources
-  // 1. channels.json has current sessions
-  // 2. Usage entries have channelId for every turn (covers old/reset sessions)
-  const sessionToChannel: Record<string, string> = {};
-  for (const { channelId, sessionId } of sessions) {
-    sessionToChannel[sessionId] = channelId;
-  }
-  for (const e of usageEntries) {
-    if (!sessionToChannel[e.sessionId] && e.channelId) {
-      sessionToChannel[e.sessionId] = e.channelId;
-    }
-  }
-
-  // Resolve Slack channel/DM names
-  const slackNames = await resolveSlackNames(
-    [...new Set(Object.values(sessionToChannel))],
-  );
-
-  // Build session → parent mapping
-  const orchChannelId = config.slack.orchestratorChannelId;
-  const sessionParentMap: Record<string, { label: string; kind: "channel" | "dm" | "agent"; active: boolean }> = {};
-
-  // Determine which sessions are currently active (in channels.json)
-  const activeSessionIds = new Set(sessions.map((s) => s.sessionId));
-
-  for (const [sessionId, channelId] of Object.entries(sessionToChannel)) {
-    const active = activeSessionIds.has(sessionId);
-    const name = slackNames[channelId];
-
-    if (channelId.startsWith("D")) {
-      // DM — name will be @username if resolved
-      sessionParentMap[sessionId] = {
-        label: name ?? `DM (${channelId})`,
-        kind: "dm",
-        active,
-      };
-    } else {
-      sessionParentMap[sessionId] = {
-        label: name ?? `#${channelId}`,
-        kind: "channel",
-        active,
-      };
-    }
-  }
-
-  // Agent sessions — override with agent lineage info
+  // Per-agent cost: map sessionId → agentName, sum usage, fallback to transcript estimate
+  const sessionToAgent = new Map<string, string>();
   for (const [name, entry] of Object.entries(agents)) {
-    if (entry.sessionId) {
-      const parent = "parent" in entry ? (entry.parent as string) : undefined;
-      sessionParentMap[entry.sessionId] = {
-        label: parent ? `${parent} → ${name}` : name,
-        kind: "agent",
-        active: entry.status === "active" || entry.status === "idle",
-      };
+    if (entry.sessionId) sessionToAgent.set(entry.sessionId, name);
+    if (entry.formerSessionIds) {
+      for (const sid of entry.formerSessionIds) sessionToAgent.set(sid, name);
     }
   }
+
+  const agentCosts: Record<string, { cost: number; estimated: boolean }> = {};
+  const agentUsageCost = new Map<string, number>();
+  for (const e of usageEntries) {
+    const agentName = sessionToAgent.get(e.sessionId);
+    if (agentName) {
+      agentUsageCost.set(agentName, (agentUsageCost.get(agentName) ?? 0) + (e.costUsd ?? 0));
+    }
+  }
+
+  for (const [name, entry] of Object.entries(agents)) {
+    const usageCost = agentUsageCost.get(name);
+    if (usageCost !== undefined) {
+      agentCosts[name] = { cost: usageCost, estimated: false };
+    } else {
+      // No usage data — estimate from transcript token counts
+      const allSessionIds: string[] = [];
+      if (entry.sessionId) allSessionIds.push(entry.sessionId);
+      if (entry.formerSessionIds) allSessionIds.push(...entry.formerSessionIds);
+
+      const cwdOverride = entry.type === "orchestrator" ? config.agent.workingDirectory : undefined;
+      let totalEstimate = 0;
+      for (const sid of allSessionIds) {
+        totalEstimate += estimateCostFromTranscript(entry, sid, cwdOverride);
+      }
+      if (totalEstimate > 0) {
+        agentCosts[name] = { cost: totalEstimate, estimated: true };
+      }
+    }
+  }
+
+  // Raw file contents for the config viewer tabs
+  const healthPath = join(FRIDAY_DIR, "health.json");
+  const channelsPath = join(SESSIONS_DIR, "channels.json");
+  const stateFiles: Array<{ label: string; path: string; content: string | null }> = [
+    {
+      label: "resolved",
+      path: "Resolved loaded configuration",
+      content: JSON.stringify(config, null, 2),
+    },
+    {
+      label: "config",
+      path: CONFIG_PATH,
+      content: existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, "utf-8") : null,
+    },
+    {
+      label: "health",
+      path: healthPath,
+      content: existsSync(healthPath) ? readFileSync(healthPath, "utf-8") : null,
+    },
+    {
+      label: "agents",
+      path: AGENTS_PATH,
+      content: Object.keys(agents).length > 0 ? JSON.stringify(agents, null, 2) : null,
+    },
+    {
+      label: "channels",
+      path: channelsPath,
+      content: existsSync(channelsPath) ? readFileSync(channelsPath, "utf-8") : null,
+    },
+  ];
 
   return {
-    configExists,
-    configPath: CONFIG_PATH,
-    config,
-    health,
-    daemonOnline,
     usageEntries,
-    sessions,
     agents,
+    agentCosts,
     memories,
-    sessionParentMap,
+    stateFiles,
   };
 };

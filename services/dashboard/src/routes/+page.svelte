@@ -1,7 +1,19 @@
 <script lang="ts">
   import { Tooltip } from "bits-ui";
+  import { getDataVersion } from '$lib/events.svelte';
+  import { invalidateAll } from '$app/navigation';
 
   let { data } = $props();
+
+  // Re-fetch server data when SSE events arrive
+  let lastVersion = $state(getDataVersion());
+  $effect(() => {
+    const v = getDataVersion();
+    if (v !== lastVersion) {
+      lastVersion = v;
+      invalidateAll();
+    }
+  });
 
   // Compute usage stats
   const entries = data.usageEntries;
@@ -35,36 +47,6 @@
   const allStats = sumEntries(entries);
   const todayStats = sumEntries(todayEntries);
   const weekStats = sumEntries(weekEntries);
-
-  // Session aggregates
-  const parentMap = data.sessionParentMap ?? {};
-  const sessionMap = new Map<string, { type: string; turns: number; cost: number; lastAt: string }>();
-  for (const e of entries) {
-    const existing = sessionMap.get(e.sessionId);
-    if (existing) {
-      existing.turns++;
-      existing.cost += e.costUsd ?? 0;
-      existing.lastAt = e.timestamp;
-    } else {
-      sessionMap.set(e.sessionId, {
-        type: e.sessionType,
-        turns: 1,
-        cost: e.costUsd ?? 0,
-        lastAt: e.timestamp,
-      });
-    }
-  }
-  const sessionList = [...sessionMap.entries()]
-    .map(([id, s]) => {
-      const parent = parentMap[id];
-      return {
-        id, ...s,
-        parentLabel: parent?.label ?? '\u2014',
-        parentKind: parent?.kind ?? 'channel',
-        active: parent?.active ?? false,
-      };
-    })
-    .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
 
   // Daily cost stacked by model + token breakdown
   const dailyMap = new Map<string, { costByModel: Map<string, number>; inputUncached: number; inputCached: number; output: number }>();
@@ -129,6 +111,9 @@
   }
   function fmtTokens(n: number) { return n.toLocaleString(); }
 
+  // Agent costs (computed server-side, with transcript-based estimates as fallback)
+  const agentCosts: Record<string, { cost: number; estimated: boolean }> = data.agentCosts ?? {};
+
   // Agent registry
   const allAgents = Object.entries(data.agents)
     .map(([name, entry]: [string, any]) => ({
@@ -171,6 +156,11 @@
     }
   }
 
+  // State file tabs
+  const stateFiles = data.stateFiles ?? [];
+  let activeFileTab = $state(0);
+  const activeFile = $derived(stateFiles[activeFileTab]);
+
   // Memory entries
   const memories = data.memories ?? [];
   const memoriesSorted = [...memories].sort(
@@ -188,28 +178,6 @@
 </svelte:head>
 
 <div class="dashboard">
-  <!-- Status Bar -->
-  <div class="status-bar card">
-    <div class="status-left">
-      <span class="pulse" class:offline={!data.daemonOnline}></span>
-      <span class="status-text">
-        {#if data.daemonOnline}
-          Online
-          {#if data.health}
-            &middot; PID {data.health.pid} &middot; up {fmtDuration(data.health.uptimeMs)}
-          {/if}
-        {:else}
-          Offline
-        {/if}
-      </span>
-    </div>
-    <div class="status-right">
-      <span class="badge" class:ok={data.configExists} class:warn={!data.configExists}>
-        {data.configExists ? 'Config loaded' : 'Using defaults'}
-      </span>
-    </div>
-  </div>
-
   <!-- Stats Row -->
   <div class="stats-row">
     <div class="card stat-card">
@@ -412,6 +380,7 @@
               <th>Agent</th>
               <th>Type</th>
               <th>Status</th>
+              <th>Cost</th>
               <th>Parent</th>
               <th>Epic/Task</th>
               <th>Children</th>
@@ -432,54 +401,17 @@
                     {agent.status}
                   </span>
                 </td>
+                <td class="text-mono">
+                  {#if agentCosts[agent.name]}
+                    {fmtCost(agentCosts[agent.name].cost)}{#if agentCosts[agent.name].estimated}<span class="estimated-badge" title="Estimated from transcript token counts">~</span>{/if}
+                  {:else}
+                    &mdash;
+                  {/if}
+                </td>
                 <td class="text-muted">{agent.parent ?? '\u2014'}</td>
                 <td class="text-mono">{agent.epicId ?? agent.taskId ?? '\u2014'}</td>
                 <td class="text-muted">{agent.children.length > 0 ? agent.children.join(', ') : '\u2014'}</td>
                 <td>{fmtAge(agent.createdAt)}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </div>
-
-    <!-- Sessions -->
-    <div class="card sessions-card">
-      <div class="card-header">
-        <h2>Sessions</h2>
-        <span class="stat-detail">{sessionList.length} total</span>
-      </div>
-      {#if sessionList.length === 0}
-        <p class="empty-state">No sessions yet</p>
-      {:else}
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Session</th>
-              <th>Type</th>
-              <th>Parent</th>
-              <th>Turns</th>
-              <th>Cost</th>
-              <th>Last Active</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each sessionList as session}
-              <tr class:past-session={!session.active}>
-                <td>{session.id.slice(0, 8)}&hellip;</td>
-                <td>
-                  <span class="badge" class:ok={session.type === 'orchestrator'} class:warn={session.type !== 'orchestrator'}>
-                    {session.type}
-                  </span>
-                </td>
-                <td>
-                  <span class="session-parent" data-kind={session.parentKind}>
-                    {session.parentLabel}
-                  </span>
-                </td>
-                <td>{session.turns}</td>
-                <td>{fmtCost(session.cost)}</td>
-                <td>{fmtAge(session.lastAt)}</td>
               </tr>
             {/each}
           </tbody>
@@ -528,13 +460,26 @@
     <!-- Config -->
     <div class="card config-card">
       <div class="card-header">
-        <h2>Configuration</h2>
-        <span class="badge" class:ok={data.configExists} class:warn={!data.configExists}>
-          {data.configExists ? 'loaded' : 'defaults'}
-        </span>
+        <h2>Files</h2>
+        <div class="file-tabs">
+          {#each stateFiles as file, i}
+            <button
+              class="file-tab"
+              class:active={activeFileTab === i}
+              class:missing={file.content == null}
+              onclick={() => activeFileTab = i}
+            >
+              {file.label}
+            </button>
+          {/each}
+        </div>
       </div>
-      <div class="config-path">{data.configPath}</div>
-      <pre class="code-block"><code>{JSON.stringify(data.config, null, 2)}</code></pre>
+      <div class="config-path">{activeFile?.path ?? ''}</div>
+      {#if activeFile?.content != null}
+        <pre class="code-block"><code>{activeFile.content}</code></pre>
+      {:else}
+        <p class="empty-state">File not found</p>
+      {/if}
     </div>
   </div>
 </div>
@@ -544,32 +489,6 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-  }
-
-  /* Status Bar */
-  .status-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.6rem 1rem;
-  }
-
-  .status-left {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-  }
-
-  .status-text {
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-  }
-
-  .status-right {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
   }
 
   /* Stats Row */
@@ -607,7 +526,6 @@
   }
 
   .agents-card,
-  .sessions-card,
   .config-card {
     grid-column: 1 / -1;
   }
@@ -636,26 +554,10 @@
     opacity: 0.4;
   }
 
-  tr.past-session {
-    opacity: 0.5;
-  }
-
-  .session-parent {
-    font-size: 0.85rem;
-    font-family: var(--font-mono);
-  }
-
-  .session-parent[data-kind="agent"] {
-    color: var(--text-secondary);
-  }
-
-  .session-parent[data-kind="channel"] {
+  .estimated-badge {
     color: var(--text-tertiary);
-  }
-
-  .session-parent[data-kind="dm"] {
-    color: var(--text-tertiary);
-    font-style: italic;
+    font-size: 0.75rem;
+    margin-left: 0.15rem;
   }
 
   .toggle-link {
@@ -943,6 +845,43 @@
     font-size: 0.75rem;
     color: var(--text-tertiary);
     margin-bottom: 0.75rem;
+  }
+
+  .config-card pre.code-block {
+    height: 16rem;
+    overflow-y: auto;
+  }
+
+  .file-tabs {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .file-tab {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--text-tertiary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .file-tab:hover {
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+  }
+  .file-tab.active {
+    color: var(--accent-primary);
+    background: var(--accent-glow);
+    border-color: var(--accent-primary);
+  }
+  .file-tab.missing {
+    opacity: 0.4;
+  }
+  .file-tab.missing.active {
+    opacity: 1;
   }
 
   /* Empty state */

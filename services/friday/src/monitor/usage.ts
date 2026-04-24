@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { UsageEntry } from "@friday/shared";
 import { USAGE_LOG_PATH } from "@friday/shared";
+import { eventBus } from "../events/bus.js";
 
 let initialized = false;
 
@@ -17,4 +18,5 @@ function ensureLogDir(): void {
 export function logUsage(entry: UsageEntry): void {
   ensureLogDir();
   appendFileSync(USAGE_LOG_PATH, JSON.stringify(entry) + "\n");
+  eventBus.publish({ type: "usage:logged", entry });
 }

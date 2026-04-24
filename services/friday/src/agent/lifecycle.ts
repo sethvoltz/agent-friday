@@ -18,8 +18,10 @@ import {
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
 import { createMailTools } from "../comms/mail-tools.js";
 import { mailCheck, mailEvents } from "../comms/mail.js";
+import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
 import { recordActivity, clearActivity } from "../monitor/agent-health.js";
+import { eventBus } from "../events/bus.js";
 
 /** Tracks running agent loops by agent name */
 const runningAgents = new Map<
@@ -287,6 +289,8 @@ async function runAgentLoop(
     mcpServers: allMcpServers,
   };
 
+  let turnNumber = 0;
+
   log("info", "agent_loop_start", { agent: agentName, resuming: !!sessionId });
 
   // Main agent loop: run turn → check mail → repeat until idle
@@ -307,7 +311,29 @@ async function runAgentLoop(
               running.sessionId = sessionId;
             }
 
+            turnNumber++;
+
+            const usage = (message as any).usage;
+            const costUsd = (message as any).total_cost_usd ?? null;
+            const durationMs = (message as any).duration_ms ?? 0;
+
+            logUsage({
+              timestamp: new Date().toISOString(),
+              channelId: "",
+              sessionType: agentType,
+              sessionId,
+              model,
+              costUsd,
+              inputTokens: usage?.input_tokens ?? 0,
+              outputTokens: usage?.output_tokens ?? 0,
+              cacheCreationTokens: usage?.cache_creation_input_tokens ?? 0,
+              cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
+              turnNumber,
+              durationMs,
+            });
+
             recordActivity(agentName);
+            eventBus.publish({ type: "turn:complete", agentName, sessionId });
             log("info", "agent_turn_complete", {
               agent: agentName,
               sessionId,

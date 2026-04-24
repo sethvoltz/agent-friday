@@ -1,10 +1,23 @@
 <script lang="ts">
   import { page } from '$app/stores';
+  import { invalidateAll } from '$app/navigation';
+  import { getLiveStatus, getConnection, getDataVersion } from '$lib/events.svelte';
   import type { AgentTreeNode, BareSessionGroup } from './+layout.server';
 
   let { data, children } = $props();
 
   let showHistory = $state(false);
+  const connection = $derived(getConnection());
+
+  // Re-fetch sidebar data when SSE events arrive
+  let lastVersion = $state(getDataVersion());
+  $effect(() => {
+    const v = getDataVersion();
+    if (v !== lastVersion) {
+      lastVersion = v;
+      invalidateAll();
+    }
+  });
 
   const agentTree: AgentTreeNode[] = $derived(data.agentTree ?? []);
   const bareGroups: BareSessionGroup[] = $derived(data.bareSessionGroups ?? []);
@@ -59,7 +72,6 @@
 <div class="sessions-layout">
   <aside class="sidebar">
     <div class="sidebar-header">
-      <a href="/" class="back-link">← Dashboard</a>
       <h2>Sessions</h2>
     </div>
 
@@ -108,6 +120,13 @@
     </div>
 
     <div class="sidebar-footer">
+      <div class="live-indicator">
+        {#if connection.connected}
+          <span class="live-dot connected">● Live</span>
+        {:else}
+          <span class="live-dot disconnected">○ Offline</span>
+        {/if}
+      </div>
       <button class="history-toggle" onclick={() => showHistory = !showHistory}>
         {showHistory ? 'Hide history' : 'Show history'}
       </button>
@@ -141,7 +160,7 @@
         <span class="item-date">{formatDateOpen(node.currentSessionStart)}</span>
       {/if}
     {/if}
-    <span class="item-dot {statusClass(node.entry.status)}">{statusDot(node.entry.status)}</span>
+    <span class="item-dot {statusClass(getLiveStatus(node.name) ?? node.entry.status)}">{statusDot(getLiveStatus(node.name) ?? node.entry.status)}</span>
   </a>
 
   {#if showHistory && node.formerSessions.length > 0}
@@ -203,13 +222,6 @@
     margin: 0.5rem 0 0;
   }
 
-  .back-link {
-    font-size: 0.75rem;
-    color: var(--text-tertiary);
-    text-decoration: none;
-  }
-  .back-link:hover { color: var(--accent-primary); }
-
   .sidebar-content {
     flex: 1;
     padding: 0.5rem 0;
@@ -261,7 +273,21 @@
   .sidebar-footer {
     padding: 0.75rem 1rem;
     border-top: 1px solid var(--border-subtle);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
+
+  .live-indicator {
+    text-align: center;
+  }
+
+  .live-dot {
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+  .live-dot.connected { color: var(--status-ok, #34d399); }
+  .live-dot.disconnected { color: var(--text-tertiary); }
 
   .history-toggle {
     width: 100%;
@@ -281,7 +307,9 @@
 
   .content {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 0.5rem 1rem;
+    display: flex;
+    flex-direction: column;
   }
 </style>

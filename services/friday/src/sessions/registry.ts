@@ -10,6 +10,7 @@ import {
   isValidAgentName,
 } from "@friday/shared";
 import { log } from "../log.js";
+import { eventBus } from "../events/bus.js";
 
 let registry: AgentRegistry = {};
 
@@ -119,6 +120,7 @@ export function registerBuilder(
     parentEntry.children.push(name);
   }
   saveRegistry();
+  eventBus.publish({ type: "agent:created", agentName: name, entry });
   log("info", "agent_registered", { name, type: "builder", parent });
   return entry;
 }
@@ -163,6 +165,7 @@ export function registerAgent(
     parentEntry.children.push(name);
   }
   saveRegistry();
+  eventBus.publish({ type: "agent:created", agentName: name, entry });
   log("info", "agent_registered", { name, type: "agent", parent });
   return entry;
 }
@@ -177,6 +180,7 @@ export function updateAgentSession(
   }
   entry.sessionId = sessionId;
   saveRegistry();
+  eventBus.publish({ type: "session:updated", agentName: name, sessionId });
 }
 
 export function updateAgentStatus(
@@ -189,6 +193,7 @@ export function updateAgentStatus(
   }
   entry.status = status;
   saveRegistry();
+  eventBus.publish({ type: "agent:status", agentName: name, status });
 }
 
 export function destroyAgent(name: string): void {
@@ -215,6 +220,7 @@ export function destroyAgent(name: string): void {
 
   entry.status = "destroyed";
   saveRegistry();
+  eventBus.publish({ type: "agent:destroyed", agentName: name });
   log("info", "agent_destroyed", { name, type: entry.type });
 }
 

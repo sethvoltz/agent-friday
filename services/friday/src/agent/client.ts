@@ -3,6 +3,7 @@ import type { SessionType } from "@friday/shared";
 import { getSessionId, setSessionId } from "../sessions/manager.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
+import { eventBus } from "../events/bus.js";
 
 export interface AgentOptions {
   channelId: string;
@@ -44,6 +45,10 @@ export async function sendToAgent(
       : callbacksOrOnChunk ?? {};
   let responseText = "";
   const startTime = Date.now();
+  let lastStreamEventAt = 0;
+  const STREAM_THROTTLE_MS = 1000;
+  // Determine agent name for events: orchestrator session type → "orchestrator", else channelId
+  const eventAgentName = options.sessionType === "orchestrator" ? "orchestrator" : options.channelId;
 
   // Thinking indicator timer — fires after thinkingDelaySec, ticks on each interval
   const thinkingDelaySec = options.thinkingIndicatorDelaySec ?? 30;
@@ -125,6 +130,13 @@ export async function sendToAgent(
             clearThinkingTimer();
           }
           callbacks.onChunk?.(text);
+          // Throttled streaming event for dashboard
+          const now = Date.now();
+          if (now - lastStreamEventAt >= STREAM_THROTTLE_MS) {
+            lastStreamEventAt = now;
+            const sessionId = existingSessionId ?? "";
+            eventBus.publish({ type: "turn:streaming", agentName: eventAgentName, sessionId, text: responseText });
+          }
         }
       }
 
@@ -196,6 +208,8 @@ export async function sendToAgent(
           turnNumber,
           durationMs,
         });
+
+        eventBus.publish({ type: "turn:complete", agentName: eventAgentName, sessionId });
       }
     }
   } finally {

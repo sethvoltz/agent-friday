@@ -9,10 +9,13 @@ interface HealthStatus {
   startedAt: string;
   lastHeartbeat: string;
   uptimeMs: number;
+  eventServerPort?: number;
 }
 
 let startedAt: Date;
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+let eventPort: number | undefined;
 
 function writeHealth(): void {
   const now = new Date();
@@ -21,6 +24,7 @@ function writeHealth(): void {
     startedAt: startedAt.toISOString(),
     lastHeartbeat: now.toISOString(),
     uptimeMs: now.getTime() - startedAt.getTime(),
+    ...(eventPort != null && { eventServerPort: eventPort }),
   };
   try {
     writeFileSync(HEALTH_FILE, JSON.stringify(status, null, 2));
@@ -29,7 +33,8 @@ function writeHealth(): void {
   }
 }
 
-export function startHealthHeartbeat(): void {
+export function startHealthHeartbeat(opts?: { eventServerPort?: number }): void {
+  eventPort = opts?.eventServerPort;
   startedAt = new Date();
   writeHealth();
   // Write heartbeat every 30 seconds

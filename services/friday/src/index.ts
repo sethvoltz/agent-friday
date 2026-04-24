@@ -8,6 +8,7 @@ import { log } from "./log.js";
 import { startHealthHeartbeat, stopHealthHeartbeat } from "./monitor/health.js";
 import { startAgentHealthCheck, stopAgentHealthCheck } from "./monitor/agent-health.js";
 import { startMailPoller, stopMailPoller } from "./comms/mail-poller.js";
+import { startEventServer, stopEventServer } from "./events/server.js";
 import { sendToAgent } from "./agent/client.js";
 import { createSlackTools } from "./agent/tools.js";
 import { createAgentTools } from "./agent/agent-tools.js";
@@ -47,6 +48,7 @@ async function main() {
     stopHealthHeartbeat();
     stopAgentHealthCheck();
     stopMailPoller();
+    await stopEventServer();
     try {
       await app.stop();
     } catch {
@@ -69,7 +71,8 @@ async function main() {
   });
 
   await app.start();
-  startHealthHeartbeat();
+  startHealthHeartbeat({ eventServerPort: config.eventServer.port });
+  await startEventServer(config.eventServer.port);
 
   const orchChannelId = config.slack.orchestratorChannelId;
   const maxLen = config.slack_formatting.maxMessageLength;

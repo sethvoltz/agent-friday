@@ -89,6 +89,12 @@ Optional config for non-orchestrator channel sessions. Same fields as `agent`. D
 |-------|---------|-------------|
 | `warnAtPercentOfDailyLimit` | `80` | Usage warning threshold (percentage) |
 
+### `eventServer`
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `port` | `7444` | Port for the SSE event server. The dashboard connects here for real-time updates. |
+
 ## File Layout
 
 ```

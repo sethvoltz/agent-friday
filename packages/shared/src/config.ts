@@ -39,12 +39,17 @@ export interface MonitoringConfig {
   warnAtPercentOfDailyLimit: number;
 }
 
+export interface EventServerConfig {
+  port: number;
+}
+
 export interface FridayConfig {
   slack: SlackConfig;
   agent: AgentConfig;
   independentAgent?: Partial<AgentConfig>;
   slack_formatting: SlackFormattingConfig;
   monitoring: MonitoringConfig;
+  eventServer: EventServerConfig;
 }
 
 const DEFAULT_CONFIG: FridayConfig = {
@@ -76,6 +81,9 @@ const DEFAULT_CONFIG: FridayConfig = {
     usageLogFile: USAGE_LOG_PATH,
     warnAtPercentOfDailyLimit: 80,
   },
+  eventServer: {
+    port: 7444,
+  },
 };
 
 export function loadConfig(): FridayConfig {
@@ -99,5 +107,6 @@ export function loadConfig(): FridayConfig {
       },
     },
     monitoring: { ...DEFAULT_CONFIG.monitoring, ...userConfig.monitoring },
+    eventServer: { ...DEFAULT_CONFIG.eventServer, ...userConfig.eventServer },
   };
 }

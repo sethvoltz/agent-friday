@@ -48,6 +48,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/comms/mail.ts` | Beads-backed inter-agent mail system with push delivery via EventEmitter |
 | `src/comms/mail-tools.ts` | Mail MCP tools (`mail_send`, `mail_check`, `mail_read`, `mail_close`) |
 | `src/comms/mail-poller.ts` | Polls for orchestrator mail and triggers turns via `sendToAgent` |
+| `src/events/bus.ts` | Singleton EventBus — typed EventEmitter with monotonic seq, ring buffer (200 events), replay for SSE reconnects |
+| `src/events/server.ts` | SSE HTTP server (Node built-in `http`) — `/events` endpoint streams `FridayEvent`s, `/health` liveness check, CORS, `Last-Event-ID` replay |
 
 ### Shared Package (`packages/shared`)
 
@@ -58,6 +60,7 @@ TypeScript types and utilities shared across services:
 - `usage.ts` — `UsageEntry` type for the JSONL usage log
 - `transcript.ts` — Session JSONL transcript parser: parses Claude Code session files into structured turns, supports full parse and last-N-turns, streaming tail via `fs.watch`, and human-readable formatting
 - `inspect.ts` — Shared agent inspection logic: resolves agent → transcript path, builds structured `InspectResult`, formats as plain text or markdown. Used by CLI, Slack command, MCP tool, and dashboard.
+- `events.ts` — `FridayEvent` discriminated union type for SSE events (agent lifecycle, turn streaming/completion, usage logging)
 
 ### Memory Package (`packages/memory`)
 
@@ -69,11 +72,13 @@ Persistent knowledge store for Orchestrator and Bare sessions. Memories are file
 
 ### Dashboard (`services/dashboard`)
 
-Optional SvelteKit app for management. Reads `~/.friday/` state files via server-side load functions. Does not need the daemon running.
+Optional SvelteKit app for management. Reads `~/.friday/` state files via server-side load functions. Works offline (static data), but connects to the daemon's SSE event server (port 7444) for real-time updates when the daemon is running.
+
+**Live updates:** The root layout connects to the daemon's SSE endpoint via `EventSource`. Events trigger `invalidateAll()` to re-fetch server data. Transcript pages show in-progress streaming text. Sidebar status dots update via live overlays. Auto-reconnects on disconnect.
 
 **Pages:**
-- `/` — Home dashboard: status, usage stats, daily cost chart, agents, sessions, memory, config
-- `/sessions` — Session explorer with hierarchical sidebar (agent tree + bare sessions) and transcript viewer. Supports current and historical sessions. Routes: `/sessions/agent/<name>[/<sessionId>]`, `/sessions/bare/<channelId>[/<sessionId>]`
+- `/` — Home dashboard: status, usage stats, daily cost chart, agents, sessions, memory, config. Live: stats/charts/tables refresh on new turns.
+- `/sessions` — Session explorer with hierarchical sidebar (agent tree + bare sessions) and transcript viewer. Live: streaming text, turn completion, agent lifecycle changes.
 
 ## Message Flow
 
@@ -150,7 +155,7 @@ All persistent state lives in `~/.friday/`:
 ~/.friday/
 ├── config.json          — Runtime config (channel IDs, agent settings, formatting)
 ├── .env                 — Secrets (SLACK_APP_TOKEN, SLACK_BOT_TOKEN)
-├── health.json          — Daemon heartbeat (pid, uptime, last beat). Present = running.
+├── health.json          — Daemon heartbeat (pid, uptime, last beat, eventServerPort). Present = running.
 ├── agents.json          — Agent registry (type, status, session IDs, parent/children, workspace)
 ├── sessions/
 │   └── channels.json    — Channel ID → Agent SDK session ID mapping
@@ -307,7 +312,7 @@ pnpm --filter @friday/cli exec vitest run src/commands/start.test.ts
 | `@friday/shared` | `config.test.ts`, `agents.test.ts`, `transcript.test.ts`, `inspect.test.ts` | Path derivation, defaults, deep merge, agent name validation, name building, JSONL transcript parsing, turn grouping, tool call tracking, formatting, agent inspection (path resolution, result building, plain/markdown formatting) |
 | `@friday/memory` | `store.test.ts`, `search.test.ts` | Memory CRUD, serialization roundtrip, recall tracking, hybrid search scoring, tag filtering, recall frequency boosting, event logging |
 | `@friday/cli` | `help.test.ts`, `services.test.ts`, 7× command tests | Help text, PID management, isRunning, parseServiceArg, findMonorepoRoot, all CLI commands including inspect and transcript |
-| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery |
+| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts`, `events/bus.test.ts`, `events/server.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay |
 
 ### Conventions
 

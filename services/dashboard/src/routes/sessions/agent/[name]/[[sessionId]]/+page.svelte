@@ -1,7 +1,61 @@
 <script lang="ts">
+  import { getStreamingText, getDataVersion, clearStreaming } from '$lib/events.svelte';
+  import { invalidateAll } from '$app/navigation';
+
   let { data } = $props();
 
   let expandedTools = $state(new Set<string>());
+
+  // Re-fetch transcript when turns complete
+  let lastVersion = $state(getDataVersion());
+  $effect(() => {
+    const v = getDataVersion();
+    if (v !== lastVersion) {
+      lastVersion = v;
+      invalidateAll();
+      clearStreaming();
+    }
+  });
+
+  // Clear streaming on navigation
+  $effect(() => {
+    data.agentName;
+    clearStreaming();
+  });
+
+  const streamText = $derived(getStreamingText(data.agentName));
+
+  // Scroll tracking
+  let turnListEl = $state<HTMLElement | null>(null);
+  let showScrollTop = $state(false);
+  let showScrollBottom = $state(false);
+  let wasAtBottom = $state(true);
+
+  function updateScrollButtons() {
+    if (!turnListEl) return;
+    const { scrollTop, scrollHeight, clientHeight } = turnListEl;
+    showScrollTop = scrollTop > 50;
+    showScrollBottom = scrollTop + clientHeight < scrollHeight - 50;
+    wasAtBottom = scrollTop + clientHeight >= scrollHeight - 50;
+  }
+
+  function scrollToTop() {
+    turnListEl?.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function scrollToBottom() {
+    turnListEl?.scrollTo({ top: turnListEl.scrollHeight, behavior: 'smooth' });
+  }
+
+  // Auto-scroll to bottom when new content arrives and already at bottom
+  $effect(() => {
+    // Track dependencies
+    streamText;
+    data.turns;
+    if (wasAtBottom && turnListEl) {
+      turnListEl.scrollTo({ top: turnListEl.scrollHeight });
+    }
+  });
 
   function toggleTool(id: string) {
     if (expandedTools.has(id)) {
@@ -81,57 +135,79 @@
       {/if}
     </div>
   {:else}
-    <div class="turn-list">
-      {#each data.turns as turn}
-        <div class="turn">
-          <div class="turn-header">
-            <span class="turn-number">Turn {turn.index + 1}</span>
-            {#if turn.timestamp}
-              <span class="turn-time">{formatTime(turn.timestamp)}</span>
+    <div class="turn-list-wrapper">
+      <div class="turn-list" bind:this={turnListEl} onscroll={updateScrollButtons}>
+        {#each data.turns as turn}
+          <div class="turn">
+            <div class="turn-header">
+              <span class="turn-number">Turn {turn.index + 1}</span>
+              {#if turn.timestamp}
+                <span class="turn-time">{formatTime(turn.timestamp)}</span>
+              {/if}
+              {#if turn.usage?.input_tokens || turn.usage?.output_tokens}
+                <span class="turn-tokens">
+                  {turn.usage.input_tokens ?? 0} in / {turn.usage.output_tokens ?? 0} out
+                </span>
+              {/if}
+            </div>
+
+            {#if turn.prompt}
+              <div class="message user-message">
+                <div class="message-role">User</div>
+                <div class="message-content">{turn.prompt}</div>
+              </div>
             {/if}
-            {#if turn.usage?.input_tokens || turn.usage?.output_tokens}
-              <span class="turn-tokens">
-                {turn.usage.input_tokens ?? 0} in / {turn.usage.output_tokens ?? 0} out
-              </span>
+
+            {#if turn.toolCalls.length > 0}
+              <div class="tool-calls">
+                {#each turn.toolCalls as tc}
+                  <button
+                    class="tool-call"
+                    class:tool-error={tc.isError}
+                    onclick={() => toggleTool(tc.id)}
+                  >
+                    <span class="tool-arrow">{expandedTools.has(tc.id) ? '▼' : '▶'}</span>
+                    <span class="tool-name">{tc.name}</span>
+                    {#if tc.isError}
+                      <span class="tool-error-badge">ERROR</span>
+                    {/if}
+                  </button>
+                  {#if expandedTools.has(tc.id)}
+                    <pre class="tool-detail">{JSON.stringify(tc.input, null, 2)}</pre>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+
+            {#if turn.response}
+              <div class="message assistant-message">
+                <div class="message-role">Assistant</div>
+                <div class="message-content">{turn.response}</div>
+              </div>
             {/if}
           </div>
+        {/each}
 
-          {#if turn.prompt}
-            <div class="message user-message">
-              <div class="message-role">User</div>
-              <div class="message-content">{turn.prompt}</div>
+        {#if streamText}
+          <div class="turn streaming-turn">
+            <div class="turn-header">
+              <span class="turn-number">Turn {data.turns.length + 1}</span>
+              <span class="turn-time streaming-label">streaming...</span>
             </div>
-          {/if}
-
-          {#if turn.toolCalls.length > 0}
-            <div class="tool-calls">
-              {#each turn.toolCalls as tc}
-                <button
-                  class="tool-call"
-                  class:tool-error={tc.isError}
-                  onclick={() => toggleTool(tc.id)}
-                >
-                  <span class="tool-arrow">{expandedTools.has(tc.id) ? '▼' : '▶'}</span>
-                  <span class="tool-name">{tc.name}</span>
-                  {#if tc.isError}
-                    <span class="tool-error-badge">ERROR</span>
-                  {/if}
-                </button>
-                {#if expandedTools.has(tc.id)}
-                  <pre class="tool-detail">{JSON.stringify(tc.input, null, 2)}</pre>
-                {/if}
-              {/each}
-            </div>
-          {/if}
-
-          {#if turn.response}
-            <div class="message assistant-message">
+            <div class="message assistant-message streaming-message">
               <div class="message-role">Assistant</div>
-              <div class="message-content">{turn.response}</div>
+              <div class="message-content">{streamText}</div>
             </div>
-          {/if}
-        </div>
-      {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if showScrollTop}
+        <button class="scroll-btn scroll-top" onclick={scrollToTop} title="Scroll to top">↑</button>
+      {/if}
+      {#if showScrollBottom}
+        <button class="scroll-btn scroll-bottom" onclick={scrollToBottom} title="Scroll to bottom">↓</button>
+      {/if}
     </div>
   {/if}
 </div>
@@ -139,6 +215,9 @@
 <style>
   .transcript-page {
     max-width: 900px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
   }
 
   .transcript-header {
@@ -198,11 +277,44 @@
   }
   .hint { font-size: 0.8rem; margin-top: 0.5rem; }
 
+  .turn-list-wrapper {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+  }
+
   .turn-list {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
+    height: 100%;
+    overflow-y: auto;
   }
+
+  .scroll-btn {
+    position: absolute;
+    right: 1rem;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    border: 1px solid var(--border-primary);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-sm);
+    transition: all var(--transition-fast);
+    z-index: 5;
+  }
+  .scroll-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+  .scroll-top { top: 0.5rem; }
+  .scroll-bottom { bottom: 0.5rem; }
 
   .turn {
     border: 1px solid var(--border-subtle);
@@ -308,5 +420,19 @@
     overflow-x: auto;
     max-height: 200px;
     color: var(--text-secondary);
+  }
+
+  .streaming-turn {
+    border-color: var(--accent-primary);
+    border-style: dashed;
+    opacity: 0.8;
+  }
+  .streaming-label {
+    color: var(--accent-primary);
+    font-style: italic;
+  }
+  .streaming-message {
+    opacity: 0.7;
+    font-style: italic;
   }
 </style>
