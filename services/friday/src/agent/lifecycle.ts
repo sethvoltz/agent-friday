@@ -16,6 +16,8 @@ import {
   type RepoSource,
 } from "./workspace.js";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
+import { createMailTools } from "../comms/mail-tools.js";
+import { mailCheck, mailEvents } from "../comms/mail.js";
 import { log } from "../log.js";
 
 /** Tracks running agent loops by agent name */
@@ -263,6 +265,13 @@ async function runAgentLoop(
       "with `bd ready --json` and continue where you left off.";
   }
 
+  // Build MCP servers — always include mail, merge with any provided servers
+  const mailMcp = createMailTools({ callerName: agentName });
+  const allMcpServers: Record<string, any> = {
+    "friday-mail": mailMcp,
+    ...mcpServers,
+  };
+
   const queryOptions: Record<string, any> = {
     allowedTools,
     cwd,
@@ -273,62 +282,135 @@ async function runAgentLoop(
       preset: "claude_code",
       append: systemPrompt,
     },
+    mcpServers: allMcpServers,
   };
 
-  if (mcpServers) {
-    queryOptions.mcpServers = mcpServers;
-  }
-
-  // Run the first turn
   log("info", "agent_loop_start", { agent: agentName, resuming: !!sessionId });
 
-  if (sessionId) {
-    queryOptions.resume = sessionId;
-  }
+  // Main agent loop: run turn → check mail → repeat until idle
+  while (!signal.aborted) {
+    try {
+      for await (const message of query({
+        prompt: prompt!,
+        options: sessionId ? { ...queryOptions, resume: sessionId } : queryOptions,
+      })) {
+        if (signal.aborted) break;
 
-  try {
-    for await (const message of query({
-      prompt: prompt!,
-      options: queryOptions,
-    })) {
-      if (signal.aborted) break;
+        if (message.type === "result") {
+          if (message.subtype === "success") {
+            sessionId = message.session_id;
+            updateAgentSession(agentName, sessionId);
+            const running = runningAgents.get(agentName);
+            if (running) {
+              running.sessionId = sessionId;
+            }
 
-      if (message.type === "result") {
-        if (message.subtype === "success") {
-          sessionId = message.session_id;
-          updateAgentSession(agentName, sessionId);
-          const running = runningAgents.get(agentName);
-          if (running) {
-            running.sessionId = sessionId;
+            log("info", "agent_turn_complete", {
+              agent: agentName,
+              sessionId,
+            });
+          } else {
+            log("error", "agent_turn_failed", {
+              agent: agentName,
+              subtype: message.subtype,
+            });
           }
-
-          log("info", "agent_turn_complete", {
-            agent: agentName,
-            sessionId,
-          });
-        } else {
-          log("error", "agent_turn_failed", {
-            agent: agentName,
-            subtype: message.subtype,
-          });
         }
       }
+    } catch (err) {
+      log("error", "agent_loop_query_error", {
+        agent: agentName,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-  } catch (err) {
-    log("error", "agent_loop_query_error", {
-      agent: agentName,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 
-  // After the first turn completes, mark as idle
-  // Phase 2 will add a mail-check loop here
-  if (!signal.aborted) {
+    if (signal.aborted) break;
+
+    // Inter-turn mail check: if there's pending mail, inject it as the next prompt.
+    // If no mail, poll every 10s until mail arrives (keeps the agent wakeable).
+    let pending = mailCheck(agentName);
+    if (pending.length > 0) {
+      const mailSummary = pending
+        .map((m) => {
+          const urgent = m.priority === "urgent" ? " [URGENT]" : "";
+          return `- ${m.id}: from=${m.from} subject="${m.subject}"${urgent}`;
+        })
+        .join("\n");
+
+      prompt = `You have ${pending.length} new message(s):\n${mailSummary}\n\nRead each with mail_read, act on it, then mail_close it.`;
+
+      log("info", "agent_loop_mail_wakeup", {
+        agent: agentName,
+        messageCount: pending.length,
+      });
+      continue; // Next iteration runs the turn with mail prompt
+    }
+
+    // No mail — go idle. Wait for push notification or 60s fallback poll.
     updateAgentStatus(agentName, "idle");
     log("info", "agent_loop_idle", { agent: agentName });
+
+    await waitForMail(agentName, signal);
+    if (signal.aborted) break;
+
+    // Re-check mail after wakeup
+    pending = mailCheck(agentName);
+    if (pending.length > 0) {
+      const mailSummary = pending
+        .map((m) => {
+          const urgent = m.priority === "urgent" ? " [URGENT]" : "";
+          return `- ${m.id}: from=${m.from} subject="${m.subject}"${urgent}`;
+        })
+        .join("\n");
+
+      prompt = `You have ${pending.length} new message(s):\n${mailSummary}\n\nRead each with mail_read, act on it, then mail_close it.`;
+
+      updateAgentStatus(agentName, "active");
+      log("info", "agent_loop_mail_wakeup_from_idle", {
+        agent: agentName,
+        messageCount: pending.length,
+      });
+      continue;
+    }
   }
 
   runningAgents.delete(agentName);
+}
+
+/**
+ * Wait for mail to arrive for an agent. Resolves when:
+ * 1. A mail event is emitted for this agent (push — instant), OR
+ * 2. 60 seconds elapse (fallback poll for CLI-sent mail), OR
+ * 3. The abort signal fires (agent destroyed)
+ */
+function waitForMail(agentName: string, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const eventName = `mail:${agentName}`;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      mailEvents.removeListener(eventName, onMail);
+      signal.removeEventListener("abort", onAbort);
+      if (timer) clearTimeout(timer);
+    };
+
+    const onMail = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onAbort = () => {
+      cleanup();
+      resolve();
+    };
+
+    mailEvents.on(eventName, onMail);
+    signal.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, 60_000);
+  });
 }
 
 function stopAgentLoop(name: string): void {
@@ -341,17 +423,24 @@ function stopAgentLoop(name: string): void {
 }
 
 /**
- * Restore active agents from the registry on daemon restart.
- * Re-spawns loops for agents that were active before shutdown.
+ * Restore agents from the registry on daemon restart.
+ * Re-spawns loops for agents that were active or idle before shutdown.
+ * Active agents resume their session. Idle agents enter the mail-wait loop
+ * and will wake if they have pending mail.
  */
 export function restoreActiveAgents(
   model: string,
   mcpServers?: Record<string, any>
 ): void {
-  const activeAgents = listAgents({ status: "active" });
+  // Restore both active and idle agents — idle agents still need
+  // their loops running so they can wake on mail
+  const agents = [
+    ...listAgents({ status: "active" }),
+    ...listAgents({ status: "idle" }),
+  ];
 
-  for (const { name, entry } of activeAgents) {
-    // Skip orchestrator — its session is managed by Slack events
+  for (const { name, entry } of agents) {
+    // Skip orchestrator — its session is managed by Slack events + mail poller
     if (entry.type === "orchestrator") continue;
 
     if (!entry.sessionId) {
@@ -360,10 +449,15 @@ export function restoreActiveAgents(
       continue;
     }
 
+    // Check for pending mail at boot
+    const pendingMail = mailCheck(name);
+
     log("info", "agent_restore", {
       agent: name,
       type: entry.type,
+      status: entry.status,
       sessionId: entry.sessionId,
+      pendingMail: pendingMail.length,
     });
 
     spawnAgentLoop({

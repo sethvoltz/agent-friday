@@ -4,6 +4,7 @@ import type { RuntimeConfig } from "../config.js";
 import { sendToAgent, type AgentCallbacks } from "../agent/client.js";
 import { createSlackTools } from "../agent/tools.js";
 import { createAgentTools } from "../agent/agent-tools.js";
+import { createMailTools } from "../comms/mail-tools.js";
 import { log } from "../log.js";
 import { resetSession, getSessionId } from "../sessions/manager.js";
 import { listAgents } from "../sessions/registry.js";
@@ -365,7 +366,11 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           thinkingIndicatorDelaySec:
             config.slack_formatting.thinkingIndicatorDelaySec,
           mcpServers: isOrchestrator
-            ? { "friday-slack": slackMcp, "friday-agents": agentMcp }
+            ? {
+                "friday-slack": slackMcp,
+                "friday-agents": agentMcp,
+                "friday-mail": createMailTools({ callerName: "orchestrator" }),
+              }
             : undefined,
           systemPrompt: buildSystemPrompt(
             config,

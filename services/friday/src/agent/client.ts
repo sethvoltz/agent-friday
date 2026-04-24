@@ -109,6 +109,11 @@ export async function sendToAgent(
           .filter((block: any) => block.type === "text")
           .map((block: any) => block.text)
           .join("");
+        // Separate consecutive assistant turns with newlines so they
+        // don't run together ("...main.Good —" → "...main.\n\nGood —")
+        if (text && responseText.length > 0) {
+          responseText += "\n\n";
+        }
         responseText += text;
         if (text) {
           // First real content — clear thinking indicator

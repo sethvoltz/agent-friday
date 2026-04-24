@@ -5,7 +5,14 @@ All runtime configuration and state lives in `~/.friday/`. This guide covers ini
 ## Directory Setup
 
 ```bash
-mkdir -p ~/.friday/sessions
+mkdir -p ~/.friday/sessions ~/.friday/working/workspaces ~/.friday/repos
+```
+
+The beads database should already be initialized per [setup-friday.md](setup-friday.md#beads-bd). If not:
+
+```bash
+mkdir -p ~/.friday/beads
+cd ~/.friday/beads && bd init --non-interactive --prefix friday --skip-agents --skip-hooks
 ```
 
 ## Tokens
@@ -90,6 +97,7 @@ Optional config for non-orchestrator channel sessions. Same fields as `agent`. D
 ├── .env                 -- Secrets (SLACK_APP_TOKEN, SLACK_BOT_TOKEN)
 ├── health.json          -- Daemon heartbeat (present = running)
 ├── agents.json          -- Agent registry (managed by daemon, do not edit manually)
+├── beads/               -- Beads database (task/epic tracking, inter-agent mail)
 ├── pids/                -- PID files for managed services
 ├── sessions/
 │   └── channels.json    -- Channel ID → Agent SDK session ID mapping

@@ -7,6 +7,7 @@ import { stopCommand } from "./commands/stop.js";
 import { restartCommand } from "./commands/restart.js";
 import { statusCommand } from "./commands/status.js";
 import { devCommand } from "./commands/dev.js";
+import { mailCommand } from "./commands/mail.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -53,6 +54,16 @@ switch (command) {
   case "dev":
     if (hasHelpFlag(commandArgs)) { showHelp("dev"); break; }
     devCommand(commandArgs);
+    break;
+
+  case "mail":
+    if (hasHelpFlag(commandArgs)) { showHelp("mail"); break; }
+    mailCommand(commandArgs);
+    break;
+
+  case "send":
+    if (hasHelpFlag(commandArgs)) { showHelp("mail"); break; }
+    mailCommand(["send", ...commandArgs]);
     break;
 
   default:

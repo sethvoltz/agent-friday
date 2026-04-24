@@ -3,6 +3,7 @@ import { FRIDAY_DIR } from "./config.js";
 
 export const AGENTS_PATH = join(FRIDAY_DIR, "agents.json");
 export const REPOS_DIR = join(FRIDAY_DIR, "repos");
+export const BEADS_DIR = join(FRIDAY_DIR, "beads");
 
 export type AgentType = "orchestrator" | "builder" | "agent";
 /** Session type includes AgentType plus "bare" for untyped Slack sessions (DMs, non-orchestrator channels) */

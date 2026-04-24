@@ -1,23 +1,46 @@
 import { describe, it, expect } from "vitest";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
+import { BEADS_DIR } from "@friday/shared";
 
 describe("buildAgentSystemPrompt", () => {
-  it("builds orchestrator prompt", () => {
+  it("builds orchestrator prompt with identity and decision framework", () => {
     const prompt = buildAgentSystemPrompt({
       agentName: "orchestrator",
       agentType: "orchestrator",
       cwd: "/tmp",
     });
-    expect(prompt).toContain("# Role: Orchestrator");
+    // Identity
+    expect(prompt).toContain("You are the Orchestrator");
+    expect(prompt).toContain("manager");
+
+    // Decision framework — delegate vs handle
+    expect(prompt).toContain("Trivial");
+    expect(prompt).toContain("delegate");
+    expect(prompt).toContain("agent_create");
+
+    // Mail processing — must read mail itself
+    expect(prompt).toContain("mail_read");
+    expect(prompt).toContain("mail_check");
+    expect(prompt).toContain("mail_send");
+    expect(prompt).toContain("mail_close");
+
+    // Beads
+    expect(prompt).toContain(BEADS_DIR);
+    expect(prompt).toContain("bd create --epic");
+
+    // Slack
     expect(prompt).toContain("slack_reply");
-    expect(prompt).toContain("`gh`");
-    expect(prompt).toContain("`bd`");
-    // Must have turn discipline guidance (wording may change)
-    expect(prompt).toMatch(/turn/i);
-    expect(prompt).toMatch(/background|independent/i);
+    expect(prompt).toContain("mrkdwn");
+
+    // Turn discipline
+    expect(prompt).toContain("End your turn");
+
+    // Status checking — actually investigate
+    expect(prompt).toContain("git -C");
+    expect(prompt).toContain("bd list --parent");
   });
 
-  it("builds builder prompt with context", () => {
+  it("builds builder prompt with workspace and epic context", () => {
     const prompt = buildAgentSystemPrompt({
       agentName: "builder-auth",
       agentType: "builder",
@@ -26,14 +49,28 @@ describe("buildAgentSystemPrompt", () => {
       workspace: "/tmp/workspaces/builder-auth",
       epicId: "bd-a1b2",
     });
-    expect(prompt).toContain("# Role: Builder");
-    expect(prompt).toContain("builder-auth");
+    expect(prompt).toContain('Builder "builder-auth"');
     expect(prompt).toContain("bd-a1b2");
     expect(prompt).toContain("orchestrator");
-    expect(prompt).toContain("`gh`");
+    expect(prompt).toContain("/tmp/workspaces/builder-auth");
+
+    // Workflow phases
+    expect(prompt).toContain("Phase 1");
+    expect(prompt).toContain("Phase 2");
+    expect(prompt).toContain("Phase 3");
+
+    // Mail for communication
+    expect(prompt).toContain("mail_send");
+    expect(prompt).toContain("mail_check");
+
+    // No direct user contact
+    expect(prompt).toContain("cannot talk to the user");
+
+    // Beads dir
+    expect(prompt).toContain(BEADS_DIR);
   });
 
-  it("builds agent prompt with context", () => {
+  it("builds agent prompt with task and parent context", () => {
     const prompt = buildAgentSystemPrompt({
       agentName: "agent-auth-tests",
       agentType: "agent",
@@ -41,24 +78,35 @@ describe("buildAgentSystemPrompt", () => {
       parent: "builder-auth",
       taskId: "bd-c3d4",
     });
-    expect(prompt).toContain("# Role: Agent");
-    expect(prompt).toContain("agent-auth-tests");
+    expect(prompt).toContain('Agent "agent-auth-tests"');
     expect(prompt).toContain("bd-c3d4");
     expect(prompt).toContain("builder-auth");
+
+    // Mail
+    expect(prompt).toContain("mail_send");
+    expect(prompt).toContain("mail_check");
+
+    // No user contact, no creating agents
+    expect(prompt).toContain("cannot create other agents");
+    expect(prompt).toContain("cannot talk to the user");
+
+    // Beads dir
+    expect(prompt).toContain(BEADS_DIR);
   });
 });
 
 describe("buildFirstTurnPrompt", () => {
-  it("orchestrator prompt mentions bd ready", () => {
+  it("orchestrator checks mail and beads on startup", () => {
     const prompt = buildFirstTurnPrompt({
       agentName: "orchestrator",
       agentType: "orchestrator",
       cwd: "/tmp",
     });
+    expect(prompt).toContain("mail_check");
     expect(prompt).toContain("bd ready");
   });
 
-  it("builder prompt references epic ID", () => {
+  it("builder with epic reads it and plans", () => {
     const prompt = buildFirstTurnPrompt({
       agentName: "builder-auth",
       agentType: "builder",
@@ -70,24 +118,35 @@ describe("buildFirstTurnPrompt", () => {
     expect(prompt).toContain("plan");
   });
 
-  it("builder prompt without epic says to wait", () => {
+  it("builder without epic checks mail", () => {
     const prompt = buildFirstTurnPrompt({
       agentName: "builder-auth",
       agentType: "builder",
       cwd: "/tmp",
       epicId: null,
     });
-    expect(prompt).toContain("Wait for instructions");
+    expect(prompt).toContain("mail_check");
   });
 
-  it("agent prompt references task ID", () => {
+  it("agent with task reads it", () => {
     const prompt = buildFirstTurnPrompt({
-      agentName: "agent-auth-tests",
+      agentName: "agent-tests",
       agentType: "agent",
       cwd: "/tmp",
       taskId: "bd-c3d4",
     });
     expect(prompt).toContain("bd-c3d4");
     expect(prompt).toContain("bd show");
+    expect(prompt).toContain("mail your parent");
+  });
+
+  it("agent without task checks mail", () => {
+    const prompt = buildFirstTurnPrompt({
+      agentName: "agent-x",
+      agentType: "agent",
+      cwd: "/tmp",
+      taskId: null,
+    });
+    expect(prompt).toContain("mail_check");
   });
 });

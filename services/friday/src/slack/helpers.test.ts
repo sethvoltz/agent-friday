@@ -46,7 +46,7 @@ describe("buildSystemPrompt", () => {
     expect(result).toBeDefined();
     expect(result!.type).toBe("preset");
     expect(result!.append).toContain("C123");
-    expect(result!.append).toContain("# Role: Orchestrator");
+    expect(result!.append).toContain("You are the Orchestrator");
   });
 
   it("orchestrator includes custom prompt after prime", () => {
@@ -55,10 +55,10 @@ describe("buildSystemPrompt", () => {
     });
     const result = buildSystemPrompt(config, "orchestrator", "C123", "/tmp");
 
-    expect(result!.append).toContain("# Role: Orchestrator");
+    expect(result!.append).toContain("You are the Orchestrator");
     expect(result!.append).toContain("CUSTOM_SIGIL_XYZ");
     // Custom prompt comes after the prime
-    const primeIdx = result!.append.indexOf("# Role: Orchestrator");
+    const primeIdx = result!.append.indexOf("You are the Orchestrator");
     const customIdx = result!.append.indexOf("CUSTOM_SIGIL_XYZ");
     expect(customIdx).toBeGreaterThan(primeIdx);
   });
@@ -68,7 +68,7 @@ describe("buildSystemPrompt", () => {
     const result = buildSystemPrompt(config, "builder", "C123", "/tmp");
 
     expect(result).toBeDefined();
-    expect(result!.append).toContain("# Role: Builder");
+    expect(result!.append).toContain("You are Builder");
   });
 
   it("agent gets agent role prime", () => {
@@ -76,7 +76,7 @@ describe("buildSystemPrompt", () => {
     const result = buildSystemPrompt(config, "agent", "C123", "/tmp");
 
     expect(result).toBeDefined();
-    expect(result!.append).toContain("# Role: Agent");
+    expect(result!.append).toContain("You are Agent");
   });
 
   it("bare session returns undefined without custom prompt", () => {

@@ -6,6 +6,13 @@ import { loadRegistry } from "./sessions/registry.js";
 import { initOrchestrator, restoreActiveAgents } from "./agent/lifecycle.js";
 import { log } from "./log.js";
 import { startHealthHeartbeat, stopHealthHeartbeat } from "./monitor/health.js";
+import { startMailPoller, stopMailPoller } from "./comms/mail-poller.js";
+import { sendToAgent } from "./agent/client.js";
+import { createSlackTools } from "./agent/tools.js";
+import { createAgentTools } from "./agent/agent-tools.js";
+import { createMailTools } from "./comms/mail-tools.js";
+import { buildSystemPrompt, chunkMessage } from "./slack/helpers.js";
+import { slackPreflight } from "./slack/preflight.js";
 
 async function main() {
   const startTime = Date.now();
@@ -36,6 +43,7 @@ async function main() {
     log("info", "shutdown_started", { signal, uptimeMs });
 
     stopHealthHeartbeat();
+    stopMailPoller();
     try {
       await app.stop();
     } catch {
@@ -59,6 +67,76 @@ async function main() {
 
   await app.start();
   startHealthHeartbeat();
+
+  const orchChannelId = config.slack.orchestratorChannelId;
+  const maxLen = config.slack_formatting.maxMessageLength;
+
+  // Resolve bot user ID for preflight (auth.test returns the bot's identity)
+  const authResult = await app.client.auth.test();
+  const botUserId = authResult.user_id ?? "";
+
+  // Clean up dangling Slack state from previous crash/restart
+  await slackPreflight({
+    client: app.client,
+    channelId: orchChannelId,
+    emojis: config.slack_formatting.emojiReactions,
+    botUserId,
+  });
+
+  // Mail poller: when agents mail the orchestrator, trigger a real orchestrator
+  // turn via sendToAgent and post the response to Slack.
+
+  startMailPoller({
+    agentName: "orchestrator",
+    onMail: async (prompt) => {
+      try {
+        const slackMcp = createSlackTools(app.client);
+        const agentMcp = createAgentTools({
+          callerName: "orchestrator",
+          callerType: "orchestrator",
+          workingDirectory: config.agent.workingDirectory,
+          model: config.agent.model,
+          postToSlack: async (text) => {
+            await app.client.chat.postMessage({ channel: orchChannelId, text });
+          },
+          slackChannelId: orchChannelId,
+        });
+        const mailMcp = createMailTools({ callerName: "orchestrator" });
+
+        const response = await sendToAgent(prompt, {
+          channelId: orchChannelId,
+          sessionType: "orchestrator",
+          workingDirectory: config.agent.workingDirectory,
+          allowedTools: config.agent.allowedTools,
+          model: config.agent.model,
+          mcpServers: {
+            "friday-slack": slackMcp,
+            "friday-agents": agentMcp,
+            "friday-mail": mailMcp,
+          },
+          systemPrompt: buildSystemPrompt(
+            config,
+            "orchestrator",
+            orchChannelId,
+            config.agent.workingDirectory
+          ),
+        });
+
+        // Post the orchestrator's response to Slack
+        const chunks = chunkMessage(response, maxLen);
+        for (const chunk of chunks) {
+          await app.client.chat.postMessage({
+            channel: orchChannelId,
+            text: chunk,
+          });
+        }
+      } catch (err) {
+        log("error", "mail_poller_turn_error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  });
 
   // Restore agents that were active before shutdown
   restoreActiveAgents(config.agent.model);

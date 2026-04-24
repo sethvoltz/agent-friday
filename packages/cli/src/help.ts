@@ -10,6 +10,8 @@ Commands:
   stop [service]     Stop services (daemon, dashboard, or all)
   restart <service>  Restart a specific service (daemon or dashboard)
   status             Show running services and health
+  mail               Inter-agent mail (check, read, send)
+  send               Shorthand for 'friday mail send'
   dev                Development mode commands
   help               Show this help message
 
@@ -108,14 +110,42 @@ friday dev — Development mode commands
 Usage: friday dev <command> [service]
 
 Commands:
-  start [service]    Start services in dev mode (tsx watch, hot reload)
-  restart <service>  Restart a specific service in dev mode
+  start [service]         Start services in dev mode (tsx watch, hot reload)
+  restart <service>       Restart a specific service in dev mode
+  reset-orchestrator      Clear orchestrator session (daemon must be stopped)
 
 Services:
   daemon             The Friday bridge daemon
   dashboard          The management dashboard
 
 If no service is specified for 'start', starts all services.
+
+Options:
+  --help, -h         Show this help
+`.trim();
+
+const MAIL_HELP = `
+friday mail — Inter-agent mail system
+
+Usage: friday mail [subcommand] [options]
+
+Subcommands:
+  (none)             List pending mail for the orchestrator
+  list [agent]       List pending mail for an agent (default: orchestrator)
+  read <id>          Read a specific message
+  send               Send a message to an agent
+
+Send options:
+  --to <agent>       Recipient agent name (required)
+  --subject, -s      Subject line (required)
+  --body, -b         Message body (required)
+  --urgent           Mark as urgent priority
+
+Examples:
+  friday mail                           Check orchestrator inbox
+  friday mail list builder-blog         Check builder-blog inbox
+  friday mail read friday-a3f2dd        Read a specific message
+  friday mail send --to orchestrator --subject "Test" --body "Hello"
 
 Options:
   --help, -h         Show this help
@@ -129,6 +159,7 @@ export const HELP: Record<string, string> = {
   stop: STOP_HELP,
   restart: RESTART_HELP,
   status: STATUS_HELP,
+  mail: MAIL_HELP,
   dev: DEV_HELP,
 };
 

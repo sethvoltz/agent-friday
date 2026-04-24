@@ -10,6 +10,10 @@ Slack (Socket Mode WS) → Friday Daemon → Claude Agent SDK → Claude Code CL
 
 The daemon is a Node.js process that maintains a persistent WebSocket to Slack and manages Claude Code sessions. It is designed as a well-behaved Unix daemon that any process manager can wrap.
 
+## Design Principles
+
+**Preserve over delete.** Err on the side of preserving data — logs, server state, chat messages — over deleting it. When cleaning up (Slack preflight, workspace teardown, session management), prefer updating or patching over removal. Data loss is harder to recover from than clutter. Exceptions will come up case-by-case, and that's fine — but the default is always preserve.
+
 ## Core Components
 
 ### Bridge Daemon (`services/friday`)
