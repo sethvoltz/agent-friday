@@ -3,6 +3,7 @@ import { createSlackApp } from "./slack/app.js";
 import { registerEventHandlers } from "./slack/events.js";
 import { loadSessions } from "./sessions/manager.js";
 import { loadRegistry } from "./sessions/registry.js";
+import { initOrchestrator, restoreActiveAgents } from "./agent/lifecycle.js";
 import { log } from "./log.js";
 import { startHealthHeartbeat, stopHealthHeartbeat } from "./monitor/health.js";
 
@@ -14,6 +15,7 @@ async function main() {
   const config = loadRuntimeConfig();
   loadSessions();
   loadRegistry();
+  initOrchestrator();
   log("info", "config_loaded", {
     orchestratorChannelId: config.slack.orchestratorChannelId,
     workingDirectory: config.agent.workingDirectory,
@@ -57,6 +59,10 @@ async function main() {
 
   await app.start();
   startHealthHeartbeat();
+
+  // Restore agents that were active before shutdown
+  restoreActiveAgents(config.agent.model);
+
   log("info", "friday_ready", {
     pid: process.pid,
     startupMs: Date.now() - startTime,

@@ -138,20 +138,22 @@ describe("workspace lifecycle", () => {
     expect(isGitRepo(result.worktrees[0].path)).toBe(true);
   });
 
-  it("rejects duplicate workspace", () => {
-    createWorkspace({
+  it("replaces stale workspace on re-creation", () => {
+    const first = createWorkspace({
       builderName: "builder-dup",
       workingDirectory: workingDir,
       repos: [{ repo: localRepoPath }],
     });
+    expect(existsSync(first.path)).toBe(true);
 
-    expect(() =>
-      createWorkspace({
-        builderName: "builder-dup",
-        workingDirectory: workingDir,
-        repos: [{ repo: localRepoPath }],
-      })
-    ).toThrow("already exists");
+    // Re-creating with same name replaces the stale workspace
+    const second = createWorkspace({
+      builderName: "builder-dup",
+      workingDirectory: workingDir,
+      repos: [{ repo: localRepoPath, branch: "friday/builder-dup-v2" }],
+    });
+    expect(existsSync(second.path)).toBe(true);
+    expect(second.worktrees[0].branch).toBe("friday/builder-dup-v2");
   });
 
   it("rejects non-existent local path", () => {

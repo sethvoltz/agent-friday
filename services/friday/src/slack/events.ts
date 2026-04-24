@@ -3,6 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import type { RuntimeConfig } from "../config.js";
 import { sendToAgent, type AgentCallbacks } from "../agent/client.js";
 import { createSlackTools } from "../agent/tools.js";
+import { createAgentTools } from "../agent/agent-tools.js";
 import { log } from "../log.js";
 import { resetSession, getSessionId } from "../sessions/manager.js";
 import { listAgents } from "../sessions/registry.js";
@@ -229,7 +230,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
     if (!("user" in message)) return;
 
     const channelId = message.channel;
-    const isOrchestrator = channelId === orchestratorChannelId;
+    const sessionType = channelId === orchestratorChannelId ? "orchestrator" as const : "bare" as const;
     const text = message.text;
     const ts = message.ts;
     const userId = message.user;
@@ -259,12 +260,12 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
 
     // Not busy — process immediately
     enqueue(queuedMsg);
-    await processQueue(channelId, isOrchestrator, config, client, say);
+    await processQueue(channelId, sessionType, config, client, say);
   });
 
   async function processQueue(
     channelId: string,
-    isOrchestrator: boolean,
+    sessionType: "orchestrator" | "bare",
     config: RuntimeConfig,
     client: WebClient,
     say: (msg: { text: string; thread_ts?: string }) => Promise<any>
@@ -327,10 +328,21 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       let thinkingMsgTs: string | null = null;
 
       try {
+        const isOrchestrator = sessionType === "orchestrator";
         const slackMcp = createSlackTools(client);
+        const agentMcp = createAgentTools({
+          callerName: "orchestrator",
+          callerType: "orchestrator",
+          workingDirectory: config.agent.workingDirectory,
+          model: config.agent.model,
+          postToSlack: async (text: string) => {
+            await client.chat.postMessage({ channel: channelId, text });
+          },
+          slackChannelId: channelId,
+        });
         const agentOptions = {
           channelId,
-          isOrchestrator,
+          sessionType,
           workingDirectory: config.agent.workingDirectory,
           allowedTools: isOrchestrator
             ? config.agent.allowedTools
@@ -343,9 +355,14 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           thinkingIndicatorDelaySec:
             config.slack_formatting.thinkingIndicatorDelaySec,
           mcpServers: isOrchestrator
-            ? { "friday-slack": slackMcp }
+            ? { "friday-slack": slackMcp, "friday-agents": agentMcp }
             : undefined,
-          systemPrompt: buildSystemPrompt(config, isOrchestrator, channelId),
+          systemPrompt: buildSystemPrompt(
+            config,
+            sessionType,
+            channelId,
+            config.agent.workingDirectory
+          ),
         };
 
         // Thinking indicator — posted when agent takes too long, deleted on first content

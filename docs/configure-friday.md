@@ -56,7 +56,7 @@ This checks for required fields and warns about issues like a missing `workingDi
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `workingDirectory` | `"."` | Working directory for Claude Code sessions |
+| `workingDirectory` | `"~/.friday/working"` | Working directory for Claude Code sessions. Also used as the root for Builder workspaces (`workspaces/<name>/`). |
 | `model` | `"claude-sonnet-4-6"` | Model to use for agent sessions |
 | `allowedTools` | `["Read", "Write", ...]` | Tools the agent can use |
 | `permissionMode` | `"auto-accept"` | Permission mode for tool calls |
@@ -89,8 +89,12 @@ Optional config for non-orchestrator channel sessions. Same fields as `agent`. D
 ├── config.json          -- Runtime config (channel IDs, agent settings, formatting)
 ├── .env                 -- Secrets (SLACK_APP_TOKEN, SLACK_BOT_TOKEN)
 ├── health.json          -- Daemon heartbeat (present = running)
+├── agents.json          -- Agent registry (managed by daemon, do not edit manually)
 ├── pids/                -- PID files for managed services
 ├── sessions/
 │   └── channels.json    -- Channel ID → Agent SDK session ID mapping
+├── working/
+│   └── workspaces/      -- Builder workspaces (git worktrees)
+├── repos/               -- Bare clone cache for remote repos
 └── usage.jsonl          -- Per-turn usage log (cost, tokens, cache hits, duration)
 ```

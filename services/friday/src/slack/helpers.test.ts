@@ -39,69 +39,77 @@ function makeConfig(overrides: Record<string, any> = {}): RuntimeConfig {
 }
 
 describe("buildSystemPrompt", () => {
-  it("returns preset with channel context for orchestrator without custom prompt", () => {
+  it("orchestrator gets channel context and role prime", () => {
     const config = makeConfig();
-    const result = buildSystemPrompt(config, true, "C123");
+    const result = buildSystemPrompt(config, "orchestrator", "C123", "/tmp");
 
-    expect(result).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are communicating via Slack channel C123.",
-    });
+    expect(result).toBeDefined();
+    expect(result!.type).toBe("preset");
+    expect(result!.append).toContain("C123");
+    expect(result!.append).toContain("# Role: Orchestrator");
   });
 
-  it("appends custom prompt to channel context for orchestrator", () => {
+  it("orchestrator includes custom prompt after prime", () => {
     const config = makeConfig({
-      agent: { systemPrompt: "You are Friday." },
+      agent: { systemPrompt: "CUSTOM_SIGIL_XYZ" },
     });
-    const result = buildSystemPrompt(config, true, "C123");
+    const result = buildSystemPrompt(config, "orchestrator", "C123", "/tmp");
 
-    expect(result).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are communicating via Slack channel C123.\n\nYou are Friday.",
-    });
+    expect(result!.append).toContain("# Role: Orchestrator");
+    expect(result!.append).toContain("CUSTOM_SIGIL_XYZ");
+    // Custom prompt comes after the prime
+    const primeIdx = result!.append.indexOf("# Role: Orchestrator");
+    const customIdx = result!.append.indexOf("CUSTOM_SIGIL_XYZ");
+    expect(customIdx).toBeGreaterThan(primeIdx);
   });
 
-  it("returns undefined for independent session without custom prompt", () => {
+  it("builder gets builder role prime", () => {
     const config = makeConfig();
-    const result = buildSystemPrompt(config, false, "C999");
+    const result = buildSystemPrompt(config, "builder", "C123", "/tmp");
+
+    expect(result).toBeDefined();
+    expect(result!.append).toContain("# Role: Builder");
+  });
+
+  it("agent gets agent role prime", () => {
+    const config = makeConfig();
+    const result = buildSystemPrompt(config, "agent", "C123", "/tmp");
+
+    expect(result).toBeDefined();
+    expect(result!.append).toContain("# Role: Agent");
+  });
+
+  it("bare session returns undefined without custom prompt", () => {
+    const config = makeConfig();
+    const result = buildSystemPrompt(config, "bare", "C999", "/tmp");
 
     expect(result).toBeUndefined();
   });
 
-  it("returns preset with custom prompt for independent session", () => {
+  it("bare session returns preset with custom prompt", () => {
     const config = makeConfig({
       independentAgent: { systemPrompt: "Be helpful." },
     });
-    const result = buildSystemPrompt(config, false, "C999");
+    const result = buildSystemPrompt(config, "bare", "C999", "/tmp");
 
-    expect(result).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are communicating via Slack channel C999.\n\nBe helpful.",
-    });
+    expect(result).toBeDefined();
+    expect(result!.append).toContain("C999");
+    expect(result!.append).toContain("Be helpful.");
   });
 
-  it("selects correct prompt when both agent and independentAgent have systemPrompt", () => {
+  it("selects correct config per session type", () => {
     const config = makeConfig({
-      agent: { systemPrompt: "Orchestrator prompt" },
-      independentAgent: { systemPrompt: "Independent prompt" },
+      agent: { systemPrompt: "ORCH_CUSTOM_SIGIL" },
+      independentAgent: { systemPrompt: "BARE_CUSTOM_SIGIL" },
     });
 
-    const orchResult = buildSystemPrompt(config, true, "C1");
-    expect(orchResult).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are communicating via Slack channel C1.\n\nOrchestrator prompt",
-    });
+    const orchResult = buildSystemPrompt(config, "orchestrator", "C1", "/tmp");
+    expect(orchResult!.append).toContain("ORCH_CUSTOM_SIGIL");
+    expect(orchResult!.append).not.toContain("BARE_CUSTOM_SIGIL");
 
-    const indResult = buildSystemPrompt(config, false, "C2");
-    expect(indResult).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are communicating via Slack channel C2.\n\nIndependent prompt",
-    });
+    const bareResult = buildSystemPrompt(config, "bare", "C2", "/tmp");
+    expect(bareResult!.append).toContain("BARE_CUSTOM_SIGIL");
+    expect(bareResult!.append).not.toContain("ORCH_CUSTOM_SIGIL");
   });
 });
 

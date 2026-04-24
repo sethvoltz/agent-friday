@@ -84,12 +84,36 @@ describe("agent registry", () => {
     ).toThrow("Invalid agent name");
   });
 
-  it("rejects duplicate agent name", () => {
+  it("rejects duplicate active agent name", () => {
     registerOrchestrator();
     registerBuilder("builder-auth", "orchestrator", "/tmp", null);
     expect(() =>
       registerBuilder("builder-auth", "orchestrator", "/tmp", null)
     ).toThrow("already exists");
+  });
+
+  it("allows re-registering a destroyed builder name", () => {
+    registerOrchestrator();
+    registerBuilder("builder-auth", "orchestrator", "/tmp/old", "epic-1");
+    destroyAgent("builder-auth");
+    expect(getAgent("builder-auth")!.status).toBe("destroyed");
+
+    const fresh = registerBuilder("builder-auth", "orchestrator", "/tmp/new", "epic-2");
+    expect(fresh.status).toBe("active");
+    expect(fresh.workspace).toBe("/tmp/new");
+    expect(fresh.epicId).toBe("epic-2");
+  });
+
+  it("allows re-registering a destroyed agent name", () => {
+    registerOrchestrator();
+    registerBuilder("builder-x", "orchestrator", "/tmp", null);
+    registerAgent("agent-task", "builder-x", "task-1", "/tmp/cwd");
+    destroyAgent("agent-task");
+    expect(getAgent("agent-task")!.status).toBe("destroyed");
+
+    const fresh = registerAgent("agent-task", "builder-x", "task-2", "/tmp/cwd2");
+    expect(fresh.status).toBe("active");
+    expect(fresh.taskId).toBe("task-2");
   });
 
   it("rejects builder created by non-orchestrator", () => {

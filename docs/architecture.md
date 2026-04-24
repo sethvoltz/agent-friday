@@ -27,7 +27,12 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/slack/app.ts` | Creates `@slack/bolt` App with Socket Mode, global error handler |
 | `src/slack/events.ts` | Message handler, `/friday` commands, per-channel FIFO queue, streaming, compaction detection |
 | `src/agent/client.ts` | Wraps Agent SDK `query()`, streams text chunks, detects compaction, logs usage, passes MCP servers and system prompt |
-| `src/agent/tools.ts` | MCP tool definitions (`slack_reply`) injected into agent sessions via `createSdkMcpServer` |
+| `src/agent/tools.ts` | Slack MCP tools (`slack_reply`) injected into agent sessions via `createSdkMcpServer` |
+| `src/agent/agent-tools.ts` | Agent management MCP tools (`agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `worktree_add`, `worktree_remove`) |
+| `src/agent/lifecycle.ts` | Agent lifecycle — create/destroy Builders and Agents, spawn/stop agent loops, restore on daemon restart |
+| `src/agent/workspace.ts` | Workspace and git worktree management for Builder agents |
+| `src/agent/prime.ts` | System prompt and first-turn prompt generation for typed agent sessions (Orchestrator, Builder, Agent) |
+| `src/sessions/registry.ts` | Agent registry CRUD — persisted to `~/.friday/agents.json`, hierarchy enforcement, session tracking |
 | `src/sessions/manager.ts` | Channel → session ID mapping (in-memory + persisted to `~/.friday/sessions/channels.json`) |
 | `src/sessions/queue.ts` | Per-channel FIFO queue with edit/delete support, emoji lifecycle helpers |
 | `src/monitor/usage.ts` | Appends per-turn usage entries to `~/.friday/usage.jsonl` |
@@ -39,6 +44,7 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 TypeScript types and utilities shared across services:
 
 - `config.ts` — `FridayConfig` type, default values, `loadConfig()` function, path constants
+- `agents.ts` — Agent types (`AgentType`, `AgentStatus`), registry types (`OrchestratorEntry`, `BuilderEntry`, `AgentEntry`), name validation
 - `usage.ts` — `UsageEntry` type for the JSONL usage log
 
 ### Dashboard (`services/dashboard`)
@@ -106,8 +112,9 @@ When the Agent SDK detects conversation compaction:
 
 | Command | Behavior |
 |---------|----------|
-| `/friday reset` | Clears channel session, posts confirmation (channel-visible) |
+| `/friday reset` | Clears channel session, posts confirmation. Blocked on the orchestrator channel (long-lived session). |
 | `/friday session` | Shows session stats: ID, turns, cost, cache rate, age, duration, working dir (channel-visible) |
+| `/friday agents` | Lists all active agents with type, name, status |
 | `/friday help` | Lists commands (ephemeral, user-only) |
 
 ## State & Configuration
@@ -119,8 +126,12 @@ All persistent state lives in `~/.friday/`:
 ├── config.json          — Runtime config (channel IDs, agent settings, formatting)
 ├── .env                 — Secrets (SLACK_APP_TOKEN, SLACK_BOT_TOKEN)
 ├── health.json          — Daemon heartbeat (pid, uptime, last beat). Present = running.
+├── agents.json          — Agent registry (type, status, session IDs, parent/children, workspace)
 ├── sessions/
 │   └── channels.json    — Channel ID → Agent SDK session ID mapping
+├── working/
+│   └── workspaces/      — Builder workspaces with git worktrees
+├── repos/               — Bare clone cache for remote repos (<org>/<repo>/)
 └── usage.jsonl          — Per-turn usage log (cost, tokens, cache hits, duration)
 ```
 
@@ -151,6 +162,50 @@ Agent SDK sessions are stored by Claude Code in `~/.claude/projects/<encoded-cwd
 **Session continuity:** Each channel maps to a persistent Agent SDK session. The session ID is tracked in `~/.friday/sessions/channels.json` and passed via `resume: sessionId` on every `query()` call. This means the agent has full context of the conversation history within that channel. Use `/reset` in Slack to start a fresh session.
 
 **Permission mode:** `bypassPermissions` — the agent can use all allowed tools without interactive confirmation. This is required since there's no human at the terminal to approve tool calls.
+
+## Agent Hierarchy
+
+Friday supports a three-tier agent model for orchestrating complex work:
+
+```
+Orchestrator (singular, root)
+├── Builder (long-lived, has workspace with worktrees)
+│   ├── Agent (short-lived, task-focused)
+│   └── Agent
+└── Builder
+    └── Agent
+```
+
+### Agent Types
+
+| Type | Lifecycle | Creates | Capabilities |
+|------|----------|---------|-------------|
+| **Orchestrator** | Singleton, managed by Slack event handler | Builders, Agents | Full tool access, Slack communication, agent management |
+| **Builder** | Long-lived, daemon-managed loop | Agents (not Builders) | Workspace with git worktrees, project-scoped work, plan-then-execute |
+| **Agent** | Short-lived, daemon-managed loop | Nothing | Single-task execution, reports to parent |
+
+### Agent Lifecycle
+
+Builders and Agents run as background loops in the daemon:
+
+1. **Create** — register in `~/.friday/agents.json`, set up workspace (Builders), spawn loop
+2. **Loop** — `query()` turn with system prompt and first-turn prompt → process result → mark idle
+3. **Destroy** — stop loop, destroy workspace (Builders), remove from registry (recursive for children)
+
+On daemon restart, active agents are restored from the registry and their loops are resumed using stored session IDs.
+
+### MCP Tools
+
+Agents interact with the system via MCP tool servers injected into their sessions:
+
+| Server | Tools | Available To |
+|--------|-------|-------------|
+| `friday-slack` | `slack_reply` | Orchestrator |
+| `friday-agents` | `agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `worktree_add`, `worktree_remove` | Orchestrator, Builders (scoped to own children) |
+
+### Workspaces
+
+Builders work in isolated workspaces under `~/.friday/working/workspaces/<builder-name>/`. Each workspace contains git worktrees from local repos or bare clones of remote repos cached in `~/.friday/repos/<org>/<repo>/`. Workspaces are created automatically when a Builder is created and cleaned up when destroyed.
 
 ## Monorepo Structure
 
@@ -215,9 +270,9 @@ pnpm --filter @friday/cli exec vitest run src/commands/start.test.ts
 
 | Package | Test files | What's tested |
 |---------|-----------|---------------|
-| `@friday/shared` | `config.test.ts` | Path derivation, defaults, deep merge (agent, slack, emoji, independentAgent), malformed JSON |
+| `@friday/shared` | `config.test.ts`, `agents.test.ts` | Path derivation, defaults, deep merge, agent name validation, name building |
 | `@friday/cli` | `help.test.ts`, `services.test.ts`, 5× command tests | Help text, PID management, isRunning, parseServiceArg, findMonorepoRoot, all CLI commands |
-| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts` | FIFO queue ops, session persistence, Slack helpers (prompt building, chunking, formatting), usage logging, runtime config validation |
+| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools |
 
 ### Conventions
 

@@ -1,8 +1,11 @@
+import type { SessionType } from "./agents.js";
+
 export interface UsageEntry {
   timestamp: string;
   channelId: string;
-  sessionType: "orchestrator" | "independent";
+  sessionType: SessionType;
   sessionId: string;
+  model?: string;
   costUsd: number | null;
   inputTokens: number;
   outputTokens: number;

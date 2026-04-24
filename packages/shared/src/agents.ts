@@ -5,6 +5,8 @@ export const AGENTS_PATH = join(FRIDAY_DIR, "agents.json");
 export const REPOS_DIR = join(FRIDAY_DIR, "repos");
 
 export type AgentType = "orchestrator" | "builder" | "agent";
+/** Session type includes AgentType plus "bare" for untyped Slack sessions (DMs, non-orchestrator channels) */
+export type SessionType = AgentType | "bare";
 export type AgentStatus = "active" | "idle" | "destroyed";
 
 export interface OrchestratorEntry {

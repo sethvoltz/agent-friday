@@ -204,9 +204,10 @@ export function createWorkspace(options: WorkspaceCreateOptions): WorkspaceInfo 
   const workspacePath = join(workspacesDir, builderName);
 
   if (existsSync(workspacePath)) {
-    throw new Error(
-      `Workspace already exists at ${workspacePath}`
-    );
+    // If the directory exists from a previously destroyed agent, clean it up
+    // and create fresh. This is user-directed (user asked to create a builder).
+    log("info", "workspace_replacing_stale", { workspacePath, builderName });
+    destroyWorkspace(workspacePath);
   }
 
   mkdirSync(workspacePath, { recursive: true });

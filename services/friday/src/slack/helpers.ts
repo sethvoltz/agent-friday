@@ -1,31 +1,45 @@
+import type { SessionType } from "@friday/shared";
 import type { RuntimeConfig } from "../config.js";
+import { buildAgentSystemPrompt } from "../agent/prime.js";
 
 /**
  * Determine the system prompt to pass to the agent SDK.
+ * Generates type-appropriate priming for each session type.
  */
 export function buildSystemPrompt(
   config: RuntimeConfig,
-  isOrchestrator: boolean,
-  channelId: string
-): string | { type: "preset"; preset: "claude_code"; append: string } | undefined {
+  sessionType: SessionType,
+  channelId: string,
+  cwd: string
+): { type: "preset"; preset: "claude_code"; append: string } | undefined {
+  const isOrchestrator = sessionType === "orchestrator";
   const agentConfig = isOrchestrator ? config.agent : config.independentAgent;
   const customPrompt = agentConfig?.systemPrompt;
 
   const channelContext = `You are communicating via Slack channel ${channelId}.`;
 
+  // Typed sessions (orchestrator, builder, agent) get their role prime
+  if (sessionType !== "bare") {
+    const prime = buildAgentSystemPrompt({
+      agentName: sessionType === "orchestrator" ? "orchestrator" : `slack-${sessionType}`,
+      agentType: sessionType,
+      cwd,
+    });
+    const parts = [channelContext, prime];
+    if (customPrompt) parts.push(customPrompt);
+    return {
+      type: "preset",
+      preset: "claude_code",
+      append: parts.join("\n\n"),
+    };
+  }
+
+  // Bare sessions: only custom prompt if configured
   if (customPrompt) {
     return {
       type: "preset",
       preset: "claude_code",
       append: `${channelContext}\n\n${customPrompt}`,
-    };
-  }
-
-  if (isOrchestrator) {
-    return {
-      type: "preset",
-      preset: "claude_code",
-      append: channelContext,
     };
   }
 

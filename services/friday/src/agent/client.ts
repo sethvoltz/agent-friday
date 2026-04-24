@@ -1,11 +1,12 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionType } from "@friday/shared";
 import { getSessionId, setSessionId } from "../sessions/manager.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
 
 export interface AgentOptions {
   channelId: string;
-  isOrchestrator: boolean;
+  sessionType: SessionType;
   workingDirectory: string;
   allowedTools: string[];
   model: string;
@@ -164,9 +165,7 @@ export async function sendToAgent(
 
         log("info", "agent_response", {
           channelId: options.channelId,
-          sessionType: options.isOrchestrator
-            ? "orchestrator"
-            : "independent",
+          sessionType: options.sessionType,
           sessionId,
           turnNumber,
           costUsd,
@@ -181,10 +180,9 @@ export async function sendToAgent(
         logUsage({
           timestamp: new Date().toISOString(),
           channelId: options.channelId,
-          sessionType: options.isOrchestrator
-            ? "orchestrator"
-            : "independent",
+          sessionType: options.sessionType,
           sessionId,
+          model: options.model,
           costUsd,
           inputTokens,
           outputTokens,

@@ -75,8 +75,9 @@ export function registerBuilder(
   if (!isValidAgentName(name)) {
     throw new Error(`Invalid agent name: "${name}"`);
   }
-  if (registry[name]) {
-    throw new Error(`Agent "${name}" already exists`);
+  const existing = registry[name];
+  if (existing && existing.status !== "destroyed") {
+    throw new Error(`Agent "${name}" already exists and is ${existing.status}`);
   }
 
   const parentEntry = registry[parent];
@@ -116,8 +117,9 @@ export function registerAgent(
   if (!isValidAgentName(name)) {
     throw new Error(`Invalid agent name: "${name}"`);
   }
-  if (registry[name]) {
-    throw new Error(`Agent "${name}" already exists`);
+  const existing = registry[name];
+  if (existing && existing.status !== "destroyed") {
+    throw new Error(`Agent "${name}" already exists and is ${existing.status}`);
   }
 
   const parentEntry = registry[parent];
