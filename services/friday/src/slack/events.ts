@@ -81,10 +81,11 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         ],
       });
     } else if (args === "agents") {
-      const agents = listAgents({ status: "active" });
+      const agents = listAgents().filter(({ entry }) => entry.status !== "destroyed");
       if (agents.length === 0) {
-        await client.chat.postMessage({
+        await client.chat.postEphemeral({
           channel: channelId,
+          user: command.user_id,
           text: "No active agents",
           blocks: [
             {
@@ -112,13 +113,22 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           "workspace" in entry ? `  ·  \`${entry.workspace}\`` : "";
         const parent =
           "parent" in entry ? `  ·  _parent: ${entry.parent}_` : "";
-        return `${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}`;
+        const status = entry.status === "active" ? ":large_green_circle:" : ":white_circle:";
+        return `${status} ${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}`;
       });
 
-      await client.chat.postMessage({
+      await client.chat.postEphemeral({
         channel: channelId,
+        user: command.user_id,
         text: `Active agents: ${agents.length}`,
         blocks: [
+          {
+            type: "header",
+            text: {
+              type: "plain_text",
+              text: `Active Agents (${agents.length})`,
+            },
+          },
           {
             type: "section",
             text: {
