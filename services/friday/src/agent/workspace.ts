@@ -215,12 +215,26 @@ export function createWorkspace(options: WorkspaceCreateOptions): WorkspaceInfo 
   // Inject .claude directory for workspace-level config
   const claudeDir = join(workspacePath, ".claude");
   mkdirSync(claudeDir, { recursive: true });
+  const guardPath = new URL("./workspace-guard.js", import.meta.url).pathname;
   writeFileSync(
     join(claudeDir, "settings.json"),
     JSON.stringify(
       {
         permissions: {
           allow: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
+        },
+        hooks: {
+          PreToolCall: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: `node "${guardPath}" "${workspacePath}"`,
+                },
+              ],
+              matcher: "",
+            },
+          ],
         },
       },
       null,
