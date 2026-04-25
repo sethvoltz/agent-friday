@@ -17,7 +17,7 @@ import {
 } from "./workspace.js";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
 import { createMailTools } from "../comms/mail-tools.js";
-import { mailCheck, mailEvents } from "../comms/mail.js";
+import { mailCheck, mailEvents, buildMailPrompt } from "../comms/mail.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
 import { recordActivity, clearActivity } from "../monitor/agent-health.js";
@@ -356,22 +356,11 @@ async function runAgentLoop(
     if (signal.aborted) break;
 
     // Inter-turn mail check: if there's pending mail, inject it as the next prompt.
-    // If no mail, poll every 10s until mail arrives (keeps the agent wakeable).
-    let pending = mailCheck(agentName);
-    if (pending.length > 0) {
-      const mailSummary = pending
-        .map((m) => {
-          const urgent = m.priority === "urgent" ? " [URGENT]" : "";
-          return `- ${m.id}: from=${m.from} subject="${m.subject}"${urgent}`;
-        })
-        .join("\n");
-
-      prompt = `You have ${pending.length} new message(s):\n${mailSummary}\n\nRead each with mail_read, act on it, then mail_close it.`;
-
-      log("info", "agent_loop_mail_wakeup", {
-        agent: agentName,
-        messageCount: pending.length,
-      });
+    // If no mail, go idle and wait for push notification or fallback poll.
+    const mailPrompt = buildMailPrompt(agentName);
+    if (mailPrompt) {
+      prompt = mailPrompt;
+      log("info", "agent_loop_mail_wakeup", { agent: agentName });
       continue; // Next iteration runs the turn with mail prompt
     }
 
@@ -383,22 +372,11 @@ async function runAgentLoop(
     if (signal.aborted) break;
 
     // Re-check mail after wakeup
-    pending = mailCheck(agentName);
-    if (pending.length > 0) {
-      const mailSummary = pending
-        .map((m) => {
-          const urgent = m.priority === "urgent" ? " [URGENT]" : "";
-          return `- ${m.id}: from=${m.from} subject="${m.subject}"${urgent}`;
-        })
-        .join("\n");
-
-      prompt = `You have ${pending.length} new message(s):\n${mailSummary}\n\nRead each with mail_read, act on it, then mail_close it.`;
-
+    const idleMailPrompt = buildMailPrompt(agentName);
+    if (idleMailPrompt) {
+      prompt = idleMailPrompt;
       updateAgentStatus(agentName, "active");
-      log("info", "agent_loop_mail_wakeup_from_idle", {
-        agent: agentName,
-        messageCount: pending.length,
-      });
+      log("info", "agent_loop_mail_wakeup_from_idle", { agent: agentName });
       continue;
     }
   }

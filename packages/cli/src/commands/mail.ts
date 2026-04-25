@@ -66,7 +66,7 @@ function listMail(agent: string): void {
   try {
     raw = bd([
       "query",
-      `assignee=${agent} AND label=type:message AND status=open`,
+      `assignee=${agent} AND label=type:message AND label=delivery:pending AND status=open`,
       "--json",
     ]);
   } catch {

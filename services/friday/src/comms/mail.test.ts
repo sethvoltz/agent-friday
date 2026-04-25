@@ -4,10 +4,12 @@ import { mailSend, mailCheck, mailRead, mailClose } from "./mail.js";
 // Mock execFileSync to capture bd commands
 const execResults = new Map<string, string>();
 let lastExecArgs: string[] = [];
+let allExecCalls: string[][] = [];
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn((_cmd: string, args: string[]) => {
     lastExecArgs = args;
+    allExecCalls.push([...args]);
     // Match on the bd subcommand (first arg)
     const joined = args.join(" ");
     for (const [pattern, result] of execResults) {
@@ -30,6 +32,7 @@ vi.mock("../log.js", () => ({
 beforeEach(() => {
   execResults.clear();
   lastExecArgs = [];
+  allExecCalls = [];
 });
 
 describe("mailSend", () => {
@@ -122,6 +125,16 @@ describe("mailCheck", () => {
     expect(messages[0].status).toBe("pending");
   });
 
+  it("queries only for pending delivery messages", () => {
+    execResults.set("query", "[]");
+    mailCheck("orchestrator");
+
+    const queryCall = allExecCalls.find((args) => args[0] === "query");
+    expect(queryCall).toBeDefined();
+    expect(queryCall![1]).toContain("delivery:pending");
+    expect(queryCall![1]).toContain("status=open");
+  });
+
   it("returns empty array on query error", () => {
     // No result set — execSync will return empty string
     expect(mailCheck("nonexistent")).toEqual([]);
@@ -129,7 +142,7 @@ describe("mailCheck", () => {
 });
 
 describe("mailRead", () => {
-  it("parses message and triggers ack labels", () => {
+  it("parses message and triggers ack labels with correct bd syntax", () => {
     // bd show --json returns an array
     execResults.set(
       "show",
@@ -149,6 +162,12 @@ describe("mailRead", () => {
     expect(msg.subject).toBe("Hello");
     expect(msg.body).toBe("World body text");
     expect(msg.status).toBe("acked");
+
+    // Verify bd label subcommand syntax: "label remove <id> <label>" not "label <id> --remove <label>"
+    const labelCalls = allExecCalls.filter((args) => args[0] === "label");
+    expect(labelCalls).toHaveLength(2);
+    expect(labelCalls[0]).toEqual(["label", "remove", "friday-abc", "delivery:pending"]);
+    expect(labelCalls[1]).toEqual(["label", "add", "friday-abc", "delivery:acked"]);
   });
 });
 

@@ -7,8 +7,10 @@ vi.mock("../log.js", () => ({
 
 const mockMailEvents = new EventEmitter();
 const mockMailCheck = vi.fn().mockReturnValue([]);
+const mockBuildMailPrompt = vi.fn().mockReturnValue(null);
 vi.mock("./mail.js", () => ({
   mailCheck: (...args: any[]) => mockMailCheck(...args),
+  buildMailPrompt: (...args: any[]) => mockBuildMailPrompt(...args),
   mailEvents: mockMailEvents,
 }));
 
@@ -34,6 +36,7 @@ describe("mail-poller", () => {
     vi.useFakeTimers();
     mockOnMail = vi.fn().mockResolvedValue(undefined);
     mockMailCheck.mockReturnValue([]);
+    mockBuildMailPrompt.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -56,6 +59,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-abc", "builder-blog", "Plan ready"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-abc: from=builder-blog subject="Plan ready"\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     // Emit push event — should trigger immediately, no timer needed
     mockMailEvents.emit("mail:orchestrator", "friday-abc");
@@ -73,6 +79,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-abc", "builder-blog", "Plan ready"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-abc: from=builder-blog subject="Plan ready"\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     startMailPoller({ agentName: "orchestrator", onMail: mockOnMail });
 
@@ -86,6 +95,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-xyz", "builder-auth", "Error!", "urgent"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-xyz: from=builder-auth subject="Error!" [URGENT]\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     startMailPoller({ agentName: "orchestrator", onMail: mockOnMail });
     mockMailEvents.emit("mail:orchestrator", "friday-xyz");
@@ -99,6 +111,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-abc", "builder-blog", "Plan ready"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-abc: from=builder-blog subject="Plan ready"\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     startMailPoller({ agentName: "orchestrator", onMail: mockOnMail });
     mockMailEvents.emit("mail:orchestrator", "friday-abc");
@@ -115,6 +130,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-abc", "builder-blog", "Plan ready"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-abc: from=builder-blog subject="Plan ready"\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     startMailPoller({ agentName: "orchestrator", onMail: mockOnMail });
     mockMailEvents.emit("mail:orchestrator", "friday-abc");
@@ -125,6 +143,9 @@ describe("mail-poller", () => {
     mockMailCheck.mockReturnValue([
       makeMessage("friday-def", "builder-auth", "Done"),
     ]);
+    mockBuildMailPrompt.mockReturnValue(
+      'You have 1 new message(s):\n\n- friday-def: from=builder-auth subject="Done"\n\nRead each with mail_read, act on it, then mail_close it.'
+    );
 
     mockMailEvents.emit("mail:orchestrator", "friday-def");
     await vi.advanceTimersByTimeAsync(0);

@@ -92,7 +92,7 @@ export function mailCheck(agentName: string): MailMessage[] {
   try {
     raw = bd([
       "query",
-      `assignee=${agentName} AND label=${LABEL_TYPE_MESSAGE} AND status=open`,
+      `assignee=${agentName} AND label=${LABEL_TYPE_MESSAGE} AND label=${LABEL_PENDING} AND status=open`,
       "--json",
     ]);
   } catch {
@@ -112,6 +112,29 @@ export function mailCheck(agentName: string): MailMessage[] {
 }
 
 /**
+ * Build a prompt string describing pending mail for an agent.
+ * Returns null if there are no pending messages.
+ * Used by both the orchestrator mail poller and the builder/helper agent loop.
+ */
+export function buildMailPrompt(agentName: string): string | null {
+  const pending = mailCheck(agentName);
+  if (pending.length === 0) return null;
+
+  const lines = pending.map((m) => {
+    const urgent = m.priority === "urgent" ? " [URGENT]" : "";
+    return `- ${m.id}: from=${m.from} subject="${m.subject}"${urgent}`;
+  });
+
+  return [
+    `You have ${pending.length} new message(s):`,
+    "",
+    ...lines,
+    "",
+    "Read each with mail_read, act on it, then mail_close it.",
+  ].join("\n");
+}
+
+/**
  * Read a specific mail message by ID. Marks it as acknowledged.
  */
 export function mailRead(id: string): MailMessage {
@@ -124,12 +147,12 @@ export function mailRead(id: string): MailMessage {
   // Mark as acknowledged if still pending
   if (mail.status === "pending") {
     try {
-      bd(["label", id, "--remove", LABEL_PENDING]);
+      bd(["label", "remove", id, LABEL_PENDING]);
     } catch {
       // Label might already be removed
     }
     try {
-      bd(["label", id, "--add", LABEL_ACKED]);
+      bd(["label", "add", id, LABEL_ACKED]);
     } catch {
       // Label might already exist
     }

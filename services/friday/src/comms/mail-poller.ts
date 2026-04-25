@@ -1,4 +1,4 @@
-import { mailCheck, mailEvents } from "./mail.js";
+import { mailCheck, mailEvents, buildMailPrompt } from "./mail.js";
 import { log } from "../log.js";
 
 const FALLBACK_POLL_MS = 60_000; // 60s fallback for CLI-sent mail
@@ -85,19 +85,11 @@ async function checkAndNotify(
     // Mark as notified before triggering (prevents re-trigger during async processing)
     for (const m of newMessages) notifiedIds.add(m.id);
 
-    const lines = newMessages.map((m) => {
-      const urgent = m.priority === "urgent" ? " [URGENT]" : "";
-      return `• ${m.id} from ${m.from}: "${m.subject}"${urgent}`;
-    });
+    // Build prompt — the poller adds orchestrator-specific guidance
+    const basePrompt = buildMailPrompt(agentName);
+    if (!basePrompt) return;
 
-    const prompt = [
-      `You have ${newMessages.length} new mail message(s):`,
-      "",
-      ...lines,
-      "",
-      "Read each message with mail_read, act on it, then mail_close it.",
-      "Relay anything important to the user via Slack.",
-    ].join("\n");
+    const prompt = basePrompt + "\nRelay anything important to the user via Slack.";
 
     log("info", "mail_poller_notified", {
       agentName,
