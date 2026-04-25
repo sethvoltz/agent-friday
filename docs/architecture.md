@@ -29,8 +29,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/config.ts` | Loads `~/.friday/config.json` + `~/.friday/.env`, validates required fields, merges with defaults |
 | `src/log.ts` | Structured JSON logger — all output goes through this (`ts`, `level`, `event`, context fields). Tees to `~/.friday/daemon.jsonl` and stdout/stderr. |
 | `src/slack/app.ts` | Creates `@slack/bolt` App with Socket Mode, global error handler |
-| `src/slack/events.ts` | Message handler, `/friday` commands, per-channel FIFO queue, streaming, compaction detection |
-| `src/agent/client.ts` | Wraps Agent SDK `query()`, streams text chunks, detects compaction, logs usage, passes MCP servers and system prompt |
+| `src/slack/events.ts` | Message handler, `/friday` commands, per-channel FIFO queue, streaming, compaction detection, image attachment handling |
+| `src/agent/client.ts` | Wraps Agent SDK `query()`, streams text chunks, detects compaction, logs usage, passes MCP servers and system prompt; accepts multimodal prompts (text + images) |
 | `src/agent/tools.ts` | Slack MCP tools (`slack_reply`) injected into agent sessions via `createSdkMcpServer` |
 | `src/agent/agent-tools.ts` | Agent management MCP tools (`agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `worktree_add`, `worktree_remove`) |
 | `src/agent/lifecycle.ts` | Agent lifecycle — create/destroy Builders and Helpers, spawn/stop agent loops, restore on daemon restart |
@@ -38,13 +38,14 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/agent/prime.ts` | System prompt and first-turn prompt generation for typed agent sessions (Orchestrator, Builder, Helper) |
 | `src/sessions/registry.ts` | Agent registry CRUD — persisted to `~/.friday/agents.json`, hierarchy enforcement, unique name enforcement, session tracking |
 | `src/sessions/manager.ts` | Channel → session ID mapping (in-memory + persisted to `~/.friday/sessions/channels.json`) |
-| `src/sessions/queue.ts` | Per-channel FIFO queue with edit/delete support, emoji lifecycle helpers |
+| `src/sessions/queue.ts` | Per-channel FIFO queue with edit/delete support, emoji lifecycle helpers; `QueuedMessage` carries optional image attachments |
 | `src/monitor/usage.ts` | Appends per-turn usage entries to `~/.friday/usage.jsonl` |
 | `src/monitor/session-stats.ts` | Reads usage log, computes session aggregates (cost, tokens, cache hit rate, duration) |
 | `src/monitor/health.ts` | Writes `~/.friday/health.json` heartbeat every 30s (pid, uptime, last heartbeat). Removed on clean shutdown. |
 | `src/monitor/agent-health.ts` | Periodic agent health checks — detects stalled agents (no turn progress) and crashed agents (loop exited but status active). Notifies orchestrator via mail. |
 | `src/memory/memory-tools.ts` | Memory MCP tools (`memory_search`, `memory_save`, `memory_get`, `memory_forget`) for Orchestrator and Bare sessions |
 | `src/slack/preflight.ts` | Boot-time Slack cleanup — patches interrupted messages and removes dangling emoji reactions from previous crashes |
+| `src/slack/image-fetch.ts` | Authenticated download of Slack private image files; returns base64-encoded `ImageAttachment[]` |
 | `src/comms/mail.ts` | Beads-backed inter-agent mail system with push delivery via EventEmitter. Uses `execFileSync` (not shell) to avoid injection. |
 | `src/comms/mail-tools.ts` | Mail MCP tools (`mail_send`, `mail_check`, `mail_read`, `mail_close`) |
 | `src/comms/mail-poller.ts` | Polls for orchestrator mail and triggers turns via `sendToAgent` |
@@ -85,17 +86,19 @@ Optional SvelteKit app for management. Reads `~/.friday/` state files via server
 ### Linear (Non-Queued) Path
 
 ```
-1. User posts message in channel
+1. User posts message in channel (text, image files, or both)
 2. Slack sends event via Socket Mode WebSocket
 3. Bolt SDK receives event, calls message handler
-4. Message is enqueued (wasQueued=false) and drained immediately
-5. Handler reacts with 👀 emoji on the message
-6. Handler calls sendToAgent() with message text
-7. Agent SDK spawns/resumes Claude Code CLI subprocess
-8. CLI processes the request (may use tools: Read, Write, Bash, etc.)
-9. If streaming: post "_..._" message, edit with chunks at 1/sec throttle
-   If non-streaming: post response flat in channel (chunked if >4000 chars)
-10. Handler removes 👀 emoji
+4. If message has image files, they are fetched via authenticated download
+   (Slack private URLs require the bot token) and base64-encoded
+5. Message is enqueued (wasQueued=false) and drained immediately
+6. Handler reacts with 👀 emoji on the message
+7. Handler calls sendToAgent() with text and any image content blocks
+8. Agent SDK spawns/resumes Claude Code CLI subprocess
+9. CLI processes the request (may use tools: Read, Write, Bash, etc.)
+10. If streaming: post "_..._" message, edit with chunks at 1/sec throttle
+    If non-streaming: post response flat in channel (chunked if >4000 chars)
+11. Handler removes 👀 emoji
 ```
 
 ### Queued (Out-of-Order) Path
