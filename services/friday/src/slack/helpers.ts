@@ -1,6 +1,12 @@
 import type { SessionType } from "@friday/shared";
 import type { RuntimeConfig } from "../config.js";
 import { buildAgentSystemPrompt } from "../agent/prime.js";
+import type { QueuedMessage, ImageAttachment } from "../sessions/queue.js";
+
+export interface MultimodalPrompt {
+  text: string;
+  images: ImageAttachment[];
+}
 
 /**
  * Determine the system prompt to pass to the agent SDK.
@@ -106,6 +112,35 @@ export function buildBlockquote(texts: string[]): string {
         .join("\n")
     )
     .join("\n\n");
+}
+
+/**
+ * Build display text for a batch of messages, substituting "[image]" for
+ * messages that have no text (image-only Slack messages).
+ */
+export function buildBatchDisplayText(messages: QueuedMessage[]): string {
+  const texts = messages.map((m) => m.text.trim() || "[image]");
+  return buildBatchPrompt(texts);
+}
+
+/**
+ * Build the prompt content for a batch. Returns a plain string when no
+ * message in the batch carries images; returns a MultimodalPrompt when at
+ * least one message has images so the caller can pass image content blocks
+ * to the agent alongside the text.
+ */
+export function buildBatchContent(
+  messages: QueuedMessage[]
+): string | MultimodalPrompt {
+  const allImages = messages.flatMap((m) => m.images ?? []);
+  const text = buildBatchPrompt(messages.map((m) => m.text.trim() || "[image]"));
+
+  if (allImages.length === 0) {
+    // Text-only batch — keep the existing string path
+    return buildBatchPrompt(messages.map((m) => m.text));
+  }
+
+  return { text, images: allImages };
 }
 
 /**
