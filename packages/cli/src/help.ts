@@ -15,6 +15,8 @@ Commands:
   mail               Inter-agent mail (check, read, send)
   send               Shorthand for 'friday mail send'
   dev                Development mode commands
+  doctor             Validate your Friday installation
+  setup              Bootstrap a new Friday installation
   help               Show this help message
 
 Options:
@@ -190,6 +192,39 @@ Examples:
   friday transcript builder-blog -o builder-blog.md
 `.trim();
 
+const DOCTOR_HELP = `
+friday doctor — Validate your Friday installation
+
+Usage: friday doctor
+
+Checks prerequisites, configuration, and services. Reports pass/warn/fail
+for each item and exits with code 1 if any check fails.
+
+Checks:
+  ~/.friday/ directory, config.json, .env tokens, working directory,
+  beads database, CLI tools (bd, claude, gh), Node.js, pnpm, services
+
+Options:
+  --help, -h         Show this help
+`.trim();
+
+const SETUP_HELP = `
+friday setup — Bootstrap a new Friday installation
+
+Usage: friday setup [options]
+
+Creates the ~/.friday/ directory structure, prompts for Slack tokens and
+orchestrator channel ID, writes config.json and .env, initializes the
+beads database, and runs 'friday doctor' to validate.
+
+Safe to re-run — existing values are used as defaults and config
+customizations are preserved.
+
+Options:
+  --yes, -y          Accept defaults without prompting (for scripted installs)
+  --help, -h         Show this help
+`.trim();
+
 export const HELP: Record<string, string> = {
   main: MAIN_HELP,
   usage: USAGE_HELP,
@@ -202,6 +237,8 @@ export const HELP: Record<string, string> = {
   dev: DEV_HELP,
   inspect: INSPECT_HELP,
   transcript: TRANSCRIPT_HELP,
+  doctor: DOCTOR_HELP,
+  setup: SETUP_HELP,
 };
 
 export function showHelp(command: string): void {

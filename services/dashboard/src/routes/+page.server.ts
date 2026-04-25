@@ -165,11 +165,24 @@ export const load: PageServerLoad = async () => {
     },
   ];
 
+  // Activity grid data (last 365 days)
+  const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
+  const activityByDate: Record<string, { count: number; cost: number }> = {};
+  for (const e of usageEntries) {
+    const ts = new Date(e.timestamp).getTime();
+    if (ts < oneYearAgo) continue;
+    const day = new Date(e.timestamp).toLocaleDateString("en-CA");
+    if (!activityByDate[day]) activityByDate[day] = { count: 0, cost: 0 };
+    activityByDate[day].count++;
+    activityByDate[day].cost += e.costUsd ?? 0;
+  }
+
   return {
     usageEntries,
     agents,
     agentCosts,
     memories,
     stateFiles,
+    activityByDate,
   };
 };

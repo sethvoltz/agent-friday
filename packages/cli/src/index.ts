@@ -10,6 +10,8 @@ import { devCommand } from "./commands/dev.js";
 import { mailCommand } from "./commands/mail.js";
 import { inspectCommand } from "./commands/inspect.js";
 import { transcriptCommand } from "./commands/transcript.js";
+import { doctorCommand } from "./commands/doctor.js";
+import { setupCommand } from "./commands/setup.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -79,6 +81,22 @@ switch (command) {
   case "transcript":
     if (hasHelpFlag(commandArgs)) { showHelp("transcript"); break; }
     transcriptCommand(commandArgs).catch((err) => {
+      console.error(err.message);
+      process.exit(1);
+    });
+    break;
+
+  case "doctor":
+    if (hasHelpFlag(commandArgs)) { showHelp("doctor"); break; }
+    doctorCommand().catch((err) => {
+      console.error(err.message);
+      process.exit(1);
+    });
+    break;
+
+  case "setup":
+    if (hasHelpFlag(commandArgs)) { showHelp("setup"); break; }
+    setupCommand(commandArgs).catch((err) => {
       console.error(err.message);
       process.exit(1);
     });
