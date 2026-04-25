@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -136,6 +136,15 @@ describe("workspace lifecycle", () => {
 
     // Verify it's actually a git worktree
     expect(isGitRepo(result.worktrees[0].path)).toBe(true);
+
+    // Verify PreToolCall hook is injected with the workspace path
+    const settings = JSON.parse(
+      readFileSync(join(result.path, ".claude", "settings.json"), "utf8")
+    );
+    expect(settings.hooks?.PreToolCall).toHaveLength(1);
+    const hookCommand: string = settings.hooks.PreToolCall[0].hooks[0].command;
+    expect(hookCommand).toContain("workspace-guard");
+    expect(hookCommand).toContain(result.path);
   });
 
   it("replaces stale workspace on re-creation", () => {
