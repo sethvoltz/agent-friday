@@ -46,6 +46,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Follow-ups are fine, new tasks are not");
     expect(prompt).toContain("Destroy when done");
 
+    // Memory — auto-recall, reflexive saving, update tool
+    expect(prompt).toContain("automatically injected");
+    expect(prompt).toContain("memory-context");
+    expect(prompt).toContain("EVERY conversation turn");
+    expect(prompt).toContain("memory_update");
+
     // Turn discipline
     expect(prompt).toContain("End your turn");
 

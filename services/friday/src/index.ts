@@ -16,6 +16,7 @@ import { createMailTools } from "./comms/mail-tools.js";
 import { buildSystemPrompt, chunkMessage } from "./slack/helpers.js";
 import { slackPreflight } from "./slack/preflight.js";
 import { createMemoryTools } from "./memory/memory-tools.js";
+import { buildMemoryContext } from "./memory/auto-recall.js";
 
 async function main() {
   const startTime = Date.now();
@@ -109,7 +110,13 @@ async function main() {
         });
         const mailMcp = createMailTools({ callerName: "orchestrator" });
 
-        const response = await sendToAgent(prompt, {
+        // Auto-recall: inject relevant memories into the mail prompt
+        const memoryContext = buildMemoryContext(prompt);
+        const enrichedPrompt = memoryContext
+          ? `${memoryContext}\n\n${prompt}`
+          : prompt;
+
+        const response = await sendToAgent(enrichedPrompt, {
           channelId: orchChannelId,
           sessionType: "orchestrator",
           workingDirectory: config.agent.workingDirectory,

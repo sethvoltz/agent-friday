@@ -36,6 +36,7 @@ import {
 } from "./helpers.js";
 import { fetchSlackImages } from "./image-fetch.js";
 import { createMemoryTools } from "../memory/memory-tools.js";
+import { buildMemoryContext } from "../memory/auto-recall.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -400,7 +401,22 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       }
 
       // Combine batch into single prompt (multimodal when images present)
-      const prompt = buildBatchContent(batch);
+      const rawPrompt = buildBatchContent(batch);
+
+      // Auto-recall: inject relevant memories into the prompt
+      const promptText = typeof rawPrompt === "string" ? rawPrompt : rawPrompt.text;
+      const memoryContext = buildMemoryContext(promptText);
+      let prompt: string | MultimodalPrompt;
+      if (memoryContext) {
+        if (typeof rawPrompt === "string") {
+          prompt = `${memoryContext}\n\n${rawPrompt}`;
+        } else {
+          prompt = { ...rawPrompt, text: `${memoryContext}\n\n${rawPrompt.text}` };
+        }
+      } else {
+        prompt = rawPrompt;
+      }
+
       const quoted = wasQueued
         ? buildBlockquote(batch.map((m) => m.text.trim() || "[image]"))
         : null;

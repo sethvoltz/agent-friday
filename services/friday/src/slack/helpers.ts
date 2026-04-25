@@ -40,11 +40,11 @@ export function buildSystemPrompt(
   // Bare sessions: always include memory guidance + optional custom prompt
   const bareMemoryPrompt = `## Memory
 
-You have persistent memory that survives across sessions. Use it proactively — don't wait to be told.
+You have persistent memory. Relevant memories are automatically injected into your context — they appear in a \`<memory-context>\` block at the top of messages.
 
-**Save** (\`memory_save\`) when you learn something worth remembering next time: user preferences, decisions and their reasoning, project context, workflow conventions, corrections to your approach. Search before saving to avoid duplicates.
+**Save reflexively:** After every turn, if you learned a preference, decision, correction, or useful context — save it immediately with \`memory_save\`. Search first to avoid duplicates; use \`memory_update\` to refine existing memories instead of creating near-duplicates.
 
-**Search** (\`memory_search\`) when the user references prior conversations, when starting work on a familiar topic, or when context from previous sessions would help.
+**Search manually** only when checking for duplicates before saving, or looking up a topic not in the current message.
 
 Keep memories concise — focus on the *why*, not just the *what*.`;
 
