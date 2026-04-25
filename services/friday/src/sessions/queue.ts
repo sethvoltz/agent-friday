@@ -5,6 +5,11 @@ export interface ImageAttachment {
   mediaType: string; // e.g. "image/png"
 }
 
+export interface MultimodalPrompt {
+  text: string;
+  images: ImageAttachment[];
+}
+
 export interface QueuedMessage {
   id: string; // Slack message ts
   channelId: string;

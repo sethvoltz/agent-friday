@@ -1,12 +1,9 @@
 import type { SessionType } from "@friday/shared";
 import type { RuntimeConfig } from "../config.js";
 import { buildAgentSystemPrompt } from "../agent/prime.js";
-import type { QueuedMessage, ImageAttachment } from "../sessions/queue.js";
+import type { QueuedMessage, MultimodalPrompt } from "../sessions/queue.js";
 
-export interface MultimodalPrompt {
-  text: string;
-  images: ImageAttachment[];
-}
+export type { MultimodalPrompt };
 
 /**
  * Determine the system prompt to pass to the agent SDK.
