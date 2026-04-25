@@ -62,16 +62,17 @@ describe("mailCommand", () => {
   });
 
   it("reads a specific message", () => {
+    // bd show --json returns an array
     execResults.set(
       "show",
-      JSON.stringify({
+      JSON.stringify([{
         id: "friday-abc",
         title: "Hello",
         description: "World body text",
         assignee: "orchestrator",
         labels: ["type:message", "delivery:pending", "from:builder-blog"],
         created: "2026-04-23T10:00:00Z",
-      })
+      }])
     );
     const logs: string[] = [];
     vi.spyOn(console, "log").mockImplementation((msg) => logs.push(String(msg)));

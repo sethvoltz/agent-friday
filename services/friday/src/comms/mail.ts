@@ -116,7 +116,9 @@ export function mailCheck(agentName: string): MailMessage[] {
  */
 export function mailRead(id: string): MailMessage {
   const raw = bd(["show", id, "--json"]);
-  const issue = JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  // bd show --json returns an array of matches, unwrap to the single issue
+  const issue = Array.isArray(parsed) ? parsed[0] : parsed;
   const mail = parseMailIssue(issue);
 
   // Mark as acknowledged if still pending

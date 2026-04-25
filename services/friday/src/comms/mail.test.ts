@@ -130,22 +130,24 @@ describe("mailCheck", () => {
 
 describe("mailRead", () => {
   it("parses message and triggers ack labels", () => {
+    // bd show --json returns an array
     execResults.set(
       "show",
-      JSON.stringify({
+      JSON.stringify([{
         id: "friday-abc",
         title: "Hello",
-        description: "World",
+        description: "World body text",
         assignee: "builder-blog",
         labels: ["type:message", "delivery:pending", "from:orchestrator"],
         created: "2026-04-23T10:00:00Z",
-      })
+      }])
     );
     execResults.set("label", "");
 
     const msg = mailRead("friday-abc");
     expect(msg.from).toBe("orchestrator");
     expect(msg.subject).toBe("Hello");
+    expect(msg.body).toBe("World body text");
     expect(msg.status).toBe("acked");
   });
 });

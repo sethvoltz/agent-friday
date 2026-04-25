@@ -98,7 +98,9 @@ function listMail(agent: string): void {
 
 function readMail(id: string): void {
   const raw = bd(["show", id, "--json"]);
-  const msg = parseMailIssue(JSON.parse(raw));
+  const parsed = JSON.parse(raw);
+  // bd show --json returns an array of matches, unwrap to the single issue
+  const msg = parseMailIssue(Array.isArray(parsed) ? parsed[0] : parsed);
 
   console.log(`\nFrom:     ${msg.from}`);
   console.log(`To:       ${msg.to}`);
