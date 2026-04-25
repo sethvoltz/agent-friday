@@ -2,6 +2,7 @@
   import { Tooltip } from "bits-ui";
   import { getDataVersion } from '$lib/events.svelte';
   import { invalidateAll } from '$app/navigation';
+  import ActivityGrid from '$lib/ActivityGrid.svelte';
 
   let { data } = $props();
 
@@ -208,6 +209,15 @@
         <span class="stat-detail">{allStats.turns} total turns</span>
       </div>
     </div>
+  </div>
+
+  <!-- Activity Grid -->
+  <div class="card activity-card">
+    <div class="card-header">
+      <h2>Activity</h2>
+      <span class="stat-detail">Orchestrator turns in the last year</span>
+    </div>
+    <ActivityGrid activityByDate={data.activityByDate} />
   </div>
 
   <!-- Main Grid -->
@@ -499,6 +509,11 @@
   }
 
   .stat-card {
+    padding: 1rem 1.25rem;
+  }
+
+  /* Activity Grid */
+  .activity-card {
     padding: 1rem 1.25rem;
   }
 

@@ -37,6 +37,13 @@
   --chart-4: #a67c52;
   --chart-cache: #5a8a5e;
 
+  /* Activity grid levels — warm amber scale */
+  --grid-empty: #e0d5c7;
+  --grid-l1: #e0c9a8;
+  --grid-l2: #d4a87a;
+  --grid-l3: #b07840;
+  --grid-l4: #8b5e2e;
+
   --shadow-sm: 0 1px 3px rgba(44, 36, 24, 0.06);
   --shadow-md: 0 4px 12px rgba(44, 36, 24, 0.08);
   --shadow-lg: 0 8px 24px rgba(44, 36, 24, 0.1);
@@ -88,6 +95,13 @@
   --chart-3: #4a7acc;
   --chart-4: #3d6ab8;
   --chart-cache: #4eae58;
+
+  /* Activity grid levels — cool blue scale, high contrast */
+  --grid-empty: #1d2330;
+  --grid-l1: #0e3460;
+  --grid-l2: #1a60b0;
+  --grid-l3: #3b8edd;
+  --grid-l4: #7bb8f0;
 
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
