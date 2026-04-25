@@ -11,7 +11,7 @@ import {
   type AgentRegistry,
   type RegistryEntry,
 } from "@friday/shared";
-import { listEntries, type MemoryEntry } from "@friday/memory";
+
 import { join } from "node:path";
 import type { PageServerLoad } from "./$types";
 
@@ -85,14 +85,6 @@ export const load: PageServerLoad = async () => {
     } catch {
       // skip
     }
-  }
-
-  // Memory entries
-  let memories: MemoryEntry[] = [];
-  try {
-    memories = listEntries();
-  } catch {
-    // Memory dir may not exist yet
   }
 
   // Per-agent cost: map sessionId → agentName, sum usage, fallback to transcript estimate
@@ -181,7 +173,7 @@ export const load: PageServerLoad = async () => {
     usageEntries,
     agents,
     agentCosts,
-    memories,
+
     stateFiles,
     activityByDate,
   };

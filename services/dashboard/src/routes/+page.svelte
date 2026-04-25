@@ -162,16 +162,6 @@
   let activeFileTab = $state(0);
   const activeFile = $derived(stateFiles[activeFileTab]);
 
-  // Memory entries
-  const memories = data.memories ?? [];
-  const memoriesSorted = [...memories].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  );
-  let showAllMemories = $state(false);
-  const MEMORY_PREVIEW_COUNT = 10;
-  const displayMemories = $derived(
-    showAllMemories ? memoriesSorted : memoriesSorted.slice(0, MEMORY_PREVIEW_COUNT)
-  );
 </script>
 
 <svelte:head>
@@ -426,44 +416,6 @@
             {/each}
           </tbody>
         </table>
-      {/if}
-    </div>
-
-    <!-- Memory -->
-    <div class="card memory-card">
-      <div class="card-header">
-        <h2>Memory</h2>
-        <span class="stat-detail">
-          {memories.length} entries{#if memories.length > MEMORY_PREVIEW_COUNT}
-            <button class="toggle-link" onclick={() => showAllMemories = !showAllMemories}>
-              {showAllMemories ? 'Show less' : `Show all ${memories.length}`}
-            </button>
-          {/if}
-        </span>
-      </div>
-      {#if memories.length === 0}
-        <p class="empty-state">No memories stored yet</p>
-      {:else}
-        <div class="memory-list">
-          {#each displayMemories as mem}
-            <div class="memory-item">
-              <div class="memory-header">
-                <span class="memory-title">{mem.title}</span>
-                <span class="memory-meta">
-                  by {mem.createdBy} &middot; recalled {mem.recallCount}x &middot; {fmtAge(mem.updatedAt)}
-                </span>
-              </div>
-              {#if mem.tags.length > 0}
-                <div class="memory-tags">
-                  {#each mem.tags as tag}
-                    <span class="memory-tag">{tag}</span>
-                  {/each}
-                </div>
-              {/if}
-              <div class="memory-content">{mem.content.slice(0, 150)}{mem.content.length > 150 ? '...' : ''}</div>
-            </div>
-          {/each}
-        </div>
       {/if}
     </div>
 
@@ -794,64 +746,6 @@
     color: var(--text-secondary);
     min-width: 2.5rem;
     text-align: right;
-  }
-
-  /* Memory */
-  .memory-card {
-    grid-column: 1 / -1;
-  }
-
-  .memory-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .memory-item {
-    padding: 0.6rem 0.75rem;
-    background: var(--bg-secondary);
-    border-radius: var(--radius-sm);
-  }
-
-  .memory-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.5rem;
-  }
-
-  .memory-title {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--text-primary);
-  }
-
-  .memory-meta {
-    font-size: 0.7rem;
-    color: var(--text-tertiary);
-    white-space: nowrap;
-  }
-
-  .memory-tags {
-    display: flex;
-    gap: 0.3rem;
-    margin-top: 0.25rem;
-  }
-
-  .memory-tag {
-    font-size: 0.65rem;
-    padding: 0.1rem 0.4rem;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-  }
-
-  .memory-content {
-    margin-top: 0.3rem;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    line-height: 1.4;
   }
 
   /* Config */

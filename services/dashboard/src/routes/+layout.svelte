@@ -91,6 +91,7 @@
       <nav class="header-nav">
         <a href="/" class:active={$page.url.pathname === '/'}>Dashboard</a>
         <a href="/sessions" class:active={$page.url.pathname.startsWith('/sessions')}>Sessions</a>
+        <a href="/memory" class:active={$page.url.pathname.startsWith('/memory')}>Memory</a>
       </nav>
       <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme">
         {theme === 'dark' ? '☀' : '☾'}
