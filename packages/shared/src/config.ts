@@ -7,6 +7,7 @@ export const CONFIG_PATH = join(FRIDAY_DIR, "config.json");
 export const ENV_PATH = join(FRIDAY_DIR, ".env");
 export const SESSIONS_DIR = join(FRIDAY_DIR, "sessions");
 export const USAGE_LOG_PATH = join(FRIDAY_DIR, "usage.jsonl");
+export const DAEMON_LOG_PATH = join(FRIDAY_DIR, "daemon.jsonl");
 
 export interface SlackConfig {
   orchestratorChannelId: string;
