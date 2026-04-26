@@ -152,3 +152,61 @@ export async function clearProcessingEmoji(
     }
   }
 }
+
+/**
+ * Add a status reaction to the last message in the batch.
+ */
+export async function addStatusReaction(
+  client: WebClient,
+  messages: QueuedMessage[],
+  emojiName: string
+): Promise<void> {
+  const last = messages[messages.length - 1];
+  if (!last) return;
+  try {
+    await client.reactions.add({
+      channel: last.channelId,
+      timestamp: last.id,
+      name: emojiName,
+    });
+  } catch {
+    // Ignore — may already have the reaction
+  }
+}
+
+/**
+ * Remove a status reaction from the last message in the batch.
+ */
+export async function removeStatusReaction(
+  client: WebClient,
+  messages: QueuedMessage[],
+  emojiName: string
+): Promise<void> {
+  const last = messages[messages.length - 1];
+  if (!last) return;
+  try {
+    await client.reactions.remove({
+      channel: last.channelId,
+      timestamp: last.id,
+      name: emojiName,
+    });
+  } catch {
+    // Ignore — may not have the reaction
+  }
+}
+
+/**
+ * Swap a status reaction on the last message in the batch (remove old, add new).
+ * If oldEmoji is null, only adds newEmoji.
+ */
+export async function swapStatusReaction(
+  client: WebClient,
+  messages: QueuedMessage[],
+  oldEmoji: string | null,
+  newEmoji: string
+): Promise<void> {
+  if (oldEmoji) {
+    await removeStatusReaction(client, messages, oldEmoji);
+  }
+  await addStatusReaction(client, messages, newEmoji);
+}
