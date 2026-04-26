@@ -78,6 +78,8 @@ export interface ScheduledEntry {
   paused: boolean;
   /** Previous session IDs (most recent first), preserved across runs */
   formerSessionIds?: string[];
+  /** Previous taskPrompt values (most recent first). Capped — supports schedule_revert. */
+  formerTaskPrompts?: string[];
 }
 
 export type RegistryEntry = OrchestratorEntry | BuilderEntry | HelperEntry | ScheduledEntry;

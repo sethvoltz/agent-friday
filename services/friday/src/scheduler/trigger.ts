@@ -265,7 +265,13 @@ async function runScheduledTask(
   });
 }
 
-function buildFirstTurnWithState(
+/**
+ * Build the first-turn prompt the scheduler hands to a freshly spawned agent:
+ * the persistent task prompt plus auto-injected `state.md` and `last-run.md`
+ * from the agent's state directory. Exported so `schedule_preview` can show
+ * the orchestrator (and user) exactly what the agent will see next run.
+ */
+export function buildFirstTurnWithState(
   name: string,
   taskPrompt: string,
   stateDir: string,
@@ -307,8 +313,9 @@ function buildFirstTurnWithState(
 /**
  * Read a file for prompt injection, capping its size to prevent prompt blow-up.
  * Returns trimmed content, with a truncation marker if the file was over the cap.
+ * Exported so `schedule_show` can preview state.md / last-run.md with the same cap.
  */
-function readInjectedFile(path: string): string {
+export function readInjectedFile(path: string): string {
   const raw = readFileSync(path, "utf-8");
   if (raw.length <= MAX_INJECTED_STATE_BYTES) return raw.trim();
   const head = raw.slice(0, MAX_INJECTED_STATE_BYTES);

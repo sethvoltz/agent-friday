@@ -210,14 +210,33 @@ export function registerScheduledAgent(
   return entry;
 }
 
+/** Maximum number of previous taskPrompts to keep, supporting schedule_revert. */
+const FORMER_TASK_PROMPT_CAP = 10;
+
 export function updateScheduledAgent(
   name: string,
-  updates: Partial<Pick<ScheduledEntry, "schedule" | "taskPrompt" | "nextRunAt" | "lastRunAt" | "paused" | "systemPromptSuffix" | "sessionId" | "formerSessionIds">>
+  updates: Partial<Pick<ScheduledEntry, "schedule" | "taskPrompt" | "nextRunAt" | "lastRunAt" | "paused" | "systemPromptSuffix" | "sessionId" | "formerSessionIds" | "formerTaskPrompts">>
 ): void {
   const entry = registry[name];
   if (!entry || entry.type !== "scheduled") {
     throw new Error(`Scheduled agent "${name}" not found`);
   }
+
+  // Archive prior taskPrompt when it actually changes. Caller can also pass
+  // formerTaskPrompts directly (schedule_revert does this) — only auto-archive
+  // when the caller didn't explicitly set the history field.
+  if (
+    updates.taskPrompt !== undefined &&
+    updates.taskPrompt !== entry.taskPrompt &&
+    updates.formerTaskPrompts === undefined
+  ) {
+    const history = [entry.taskPrompt, ...(entry.formerTaskPrompts ?? [])].slice(
+      0,
+      FORMER_TASK_PROMPT_CAP
+    );
+    entry.formerTaskPrompts = history;
+  }
+
   Object.assign(entry, updates);
   saveRegistry();
 }

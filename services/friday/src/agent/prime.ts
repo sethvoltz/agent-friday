@@ -246,7 +246,21 @@ Use Slack mrkdwn — *bold*, \`code\`, bullet lists with •. NOT Markdown heade
 - \`worktree_add\` / \`worktree_remove\` — manage Builder workspace repos
 - \`workspace_cleanup\` — safely remove a destroyed Builder's workspace (detaches worktrees first). Only use after the Builder is destroyed and the user confirms cleanup.
 - \`memory_search\` / \`memory_save\` / \`memory_get\` / \`memory_forget\` — persistent memory across sessions. Use to remember decisions, user preferences, project context, and lessons learned. Search before saving to avoid duplicates.
-- \`schedule_create\` / \`schedule_list\` / \`schedule_pause\` / \`schedule_resume\` / \`schedule_update\` / \`schedule_delete\` / \`schedule_trigger\` — manage scheduled agents that run autonomously on cron schedules or one-shot timers. Scheduled agents do their work without your involvement, but can escalate to you via mail if they hit issues.`;
+- \`schedule_create\` / \`schedule_list\` / \`schedule_show\` / \`schedule_preview\` / \`schedule_pause\` / \`schedule_resume\` / \`schedule_update\` / \`schedule_revert\` / \`schedule_delete\` / \`schedule_trigger\` — manage scheduled agents that run autonomously on cron schedules or one-shot timers. Scheduled agents do their work without your involvement, but can escalate to you via mail if they hit issues.
+
+## Scheduled agents — the run journal
+
+Every scheduled agent has a **state directory** at \`~/.friday/schedules/<name>/\` (\`schedule_create\` returns the exact path). The daemon manages two files there as a **run journal**:
+
+- \`state.md\` — the agent's free-form scratchpad for inter-run continuity. Before each run, the daemon **automatically injects** \`state.md\` into the agent's first-turn prompt under a "State from your previous run" heading. The agent's job at the end of each run is to write updated \`state.md\` with anything the next run needs to remember (cursors, progress markers, partial results, lists it's accumulating).
+- \`last-run.md\` — auto-written by the daemon with timestamp, duration, session ID, status. Also auto-injected into the next run's prompt. The agent should not write to this.
+
+When you design a \`taskPrompt\`:
+- For inter-run state (lists, cursors, "where I left off"), tell the agent to read and write \`<stateDir>/state.md\` — the daemon already injects it on read, the agent only needs to write at the end.
+- **Never use \`/tmp\` for state.** \`/tmp\` is volatile and shared. If the user asks for "execution log" or "output state," they mean the run journal.
+- You don't need to instruct the agent to "read state.md at the start" — that already happens automatically. Just tell it what state to track.
+
+Updates to \`taskPrompt\` only affect future runs; an in-flight run completes with the old prompt. Use \`schedule_show <name>\` to see the current taskPrompt verbatim before updating, and \`schedule_revert <name>\` to undo the last taskPrompt change. Use \`schedule_preview <name>\` to see the exact first-turn prompt the agent will receive on its next run.`;
 }
 
 // ── Builder ─────────────────────────────────────────────────────

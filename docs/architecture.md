@@ -267,15 +267,19 @@ Scheduled agents run autonomous periodic tasks without orchestrator involvement.
 3. The agent executes its task, updates its state file, and exits. It goes dormant until the next trigger.
 4. If the agent encounters issues, it escalates via `mail_send` to the orchestrator
 
-**Run-to-run continuity:** Each scheduled agent has a state directory at `~/.friday/schedules/<name>/` containing:
-- `state.md` — free-form scratchpad the agent reads at run start and writes before finishing. Carries cursors, progress markers, partial results between runs.
-- `last-run.md` — auto-written metadata (timestamp, duration, session ID, status)
+**Run-to-run continuity (the run journal):** Each scheduled agent has a state directory at `~/.friday/schedules/<name>/` containing:
+- `state.md` — free-form scratchpad. The daemon **auto-injects** it into the next run's first-turn prompt under "State from your previous run" — the agent doesn't read it manually. The agent writes a fresh `state.md` at the end of each run with anything the next run needs.
+- `last-run.md` — auto-written metadata (timestamp, duration, session ID, status). Also auto-injected into the next run.
+
+The orchestrator's system prompt explicitly teaches this convention so it picks `<stateDir>/state.md` (not `/tmp`) when designing taskPrompts. Updates to `taskPrompt` only affect future runs — `schedule_show` reveals the current configuration verbatim, `schedule_preview` shows the assembled first-turn prompt, and `schedule_revert` rolls back the last `taskPrompt` change (history capped at 10).
 
 **Key behaviors:**
 - New session each run (avoids ballooning context/cost)
 - Concurrent run guard — won't trigger if already running
 - One-shot schedules auto-pause after firing (preserve over delete)
 - Missed schedules on daemon restart catch up with at most one immediate execution
+- Atomic registry writes; cron and runAt validated at write time
+- In-flight runs cooperatively aborted on SIGTERM via `drainScheduledRuns`
 
 ### MCP Tools
 
@@ -286,7 +290,7 @@ Agents interact with the system via MCP tool servers injected into their session
 | `friday-slack` | `slack_reply` | Orchestrator |
 | `friday-agents` | `agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `agent_inspect`, `worktree_add`, `worktree_remove`, `workspace_cleanup` | Orchestrator, Builders (scoped to own children) |
 | `friday-mail` | `mail_send`, `mail_check`, `mail_read`, `mail_close` | All agent types |
-| `friday-scheduler` | `schedule_create`, `schedule_list`, `schedule_pause`, `schedule_resume`, `schedule_update`, `schedule_delete`, `schedule_trigger` | Orchestrator |
+| `friday-scheduler` | `schedule_create`, `schedule_list`, `schedule_show`, `schedule_preview`, `schedule_pause`, `schedule_resume`, `schedule_update`, `schedule_revert`, `schedule_delete`, `schedule_trigger` | Orchestrator |
 | `friday-memory` | `memory_search`, `memory_save`, `memory_get`, `memory_forget` | Orchestrator, Bare sessions |
 
 ### Workspaces
