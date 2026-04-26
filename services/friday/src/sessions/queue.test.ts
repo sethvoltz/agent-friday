@@ -270,6 +270,34 @@ describe("queue — emoji helpers", () => {
     });
   });
 
+  it("swapStatusReaction is a no-op when old and new emoji are the same", async () => {
+    const client = mockClient();
+    const msgs = [makeMsg({ id: "ts-1", channelId: "C1" })];
+
+    await swapStatusReaction(client, msgs, "technologist", "technologist");
+
+    expect(client.reactions.remove).not.toHaveBeenCalled();
+    expect(client.reactions.add).not.toHaveBeenCalled();
+  });
+
+  it("addStatusReaction is a no-op when emoji name is empty (kill switch)", async () => {
+    const client = mockClient();
+    const msgs = [makeMsg({ id: "ts-1", channelId: "C1" })];
+
+    await addStatusReaction(client, msgs, "");
+
+    expect(client.reactions.add).not.toHaveBeenCalled();
+  });
+
+  it("removeStatusReaction is a no-op when emoji name is empty (kill switch)", async () => {
+    const client = mockClient();
+    const msgs = [makeMsg({ id: "ts-1", channelId: "C1" })];
+
+    await removeStatusReaction(client, msgs, "");
+
+    expect(client.reactions.remove).not.toHaveBeenCalled();
+  });
+
   it("swapToProcessing continues to subsequent messages after error on first", async () => {
     const client = mockClient();
     // First message fails, second should still be processed

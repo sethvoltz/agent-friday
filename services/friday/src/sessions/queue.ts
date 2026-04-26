@@ -1,4 +1,5 @@
 import type { WebClient } from "@slack/web-api";
+import { log } from "../log.js";
 
 export interface ImageAttachment {
   data: string; // base64-encoded bytes
@@ -154,13 +155,35 @@ export async function clearProcessingEmoji(
 }
 
 /**
+ * Slack reaction errors we expect and intentionally swallow vs ones worth logging.
+ * `already_reacted` / `no_reaction` are normal idempotency outcomes. Anything else
+ * (missing scope, invalid name, ratelimited, channel access) is real signal — log it.
+ */
+function logReactionFailure(op: "add" | "remove", emoji: string, err: unknown): void {
+  const code =
+    typeof err === "object" && err !== null && "data" in err
+      ? (err as { data?: { error?: string } }).data?.error
+      : undefined;
+  if (op === "add" && code === "already_reacted") return;
+  if (op === "remove" && code === "no_reaction") return;
+  log("debug", "slack_status_reaction_failed", {
+    op,
+    emoji,
+    code: code ?? null,
+    error: err instanceof Error ? err.message : String(err),
+  });
+}
+
+/**
  * Add a status reaction to the last message in the batch.
+ * Empty `emojiName` is treated as a no-op (per-emoji kill switch via config).
  */
 export async function addStatusReaction(
   client: WebClient,
   messages: QueuedMessage[],
   emojiName: string
 ): Promise<void> {
+  if (!emojiName) return;
   const last = messages[messages.length - 1];
   if (!last) return;
   try {
@@ -169,19 +192,21 @@ export async function addStatusReaction(
       timestamp: last.id,
       name: emojiName,
     });
-  } catch {
-    // Ignore — may already have the reaction
+  } catch (err) {
+    logReactionFailure("add", emojiName, err);
   }
 }
 
 /**
  * Remove a status reaction from the last message in the batch.
+ * Empty `emojiName` is treated as a no-op (per-emoji kill switch via config).
  */
 export async function removeStatusReaction(
   client: WebClient,
   messages: QueuedMessage[],
   emojiName: string
 ): Promise<void> {
+  if (!emojiName) return;
   const last = messages[messages.length - 1];
   if (!last) return;
   try {
@@ -190,14 +215,14 @@ export async function removeStatusReaction(
       timestamp: last.id,
       name: emojiName,
     });
-  } catch {
-    // Ignore — may not have the reaction
+  } catch (err) {
+    logReactionFailure("remove", emojiName, err);
   }
 }
 
 /**
  * Swap a status reaction on the last message in the batch (remove old, add new).
- * If oldEmoji is null, only adds newEmoji.
+ * If oldEmoji is null/empty, only adds newEmoji. If oldEmoji === newEmoji, no-op.
  */
 export async function swapStatusReaction(
   client: WebClient,
@@ -205,6 +230,7 @@ export async function swapStatusReaction(
   oldEmoji: string | null,
   newEmoji: string
 ): Promise<void> {
+  if (oldEmoji && oldEmoji === newEmoji) return;
   if (oldEmoji) {
     await removeStatusReaction(client, messages, oldEmoji);
   }
