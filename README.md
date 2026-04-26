@@ -1,15 +1,8 @@
-```
-                                                                   
-     ▄▄                              ▄▄▄▄▄▄▄                       
-   ▄█▀▀█▄                     █▄    █▀██▀▀▀          █▄            
-   ██  ██      ▄▄       ▄    ▄██▄     ██  ▄    ▀▀    ██            
-   ██▀▀██   ▄████ ▄█▀█▄ ████▄ ██      ███▀████▄██ ▄████ ▄▀▀█▄ ██ ██
- ▄ ██  ██   ██ ██ ██▄█▀ ██ ██ ██    ▄ ██  ██   ██ ██ ██ ▄█▀██ ██▄██
- ▀██▀  ▀█▄█▄▀████▄▀█▄▄▄▄██ ▀█▄██    ▀██▀ ▄█▀  ▄██▄█▀███▄▀█▄██▄▄▀██▀
-               ██                                               ██ 
-             ▀▀▀                                              ▀▀▀  
-
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/readme-header-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="images/readme-header-light.png">
+  <img alt="Friday — Understands context. Executes tasks. Builds solutions." src="images/readme-header-light.png">
+</picture>
 
 Your local Slack-to-Claude-Code bridge. Command an AI agent from anywhere -- just send a Slack message.
 
