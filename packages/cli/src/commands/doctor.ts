@@ -9,6 +9,7 @@ import {
   loadConfig,
 } from "@friday/shared";
 import { readPid, isRunning } from "../services.js";
+import { BANNER } from "../help.js";
 
 export interface CheckResult {
   status: "pass" | "warn" | "fail";
@@ -289,6 +290,7 @@ export function printResults(results: CheckResult[], durationMs?: number): void 
 }
 
 export async function doctorCommand(): Promise<void> {
+  console.log(BANNER);
   const t0 = Date.now();
   const results = await runChecks();
   const elapsed = Date.now() - t0;

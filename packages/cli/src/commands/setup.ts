@@ -11,6 +11,7 @@ import {
   type FridayConfig,
 } from "@friday/shared";
 import { runChecks, printResults } from "./doctor.js";
+import { BANNER } from "../help.js";
 
 // ── ANSI helpers ────────────────────────────────────────────────────────
 const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
@@ -94,7 +95,7 @@ async function confirm(rl: Interface, question: string, defaultYes = true): Prom
 export async function setupCommand(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
-  console.log();
+  console.log(BANNER);
   console.log(`  ${bold("Friday Setup")}`);
 
   const hasExisting = existsSync(CONFIG_PATH);
