@@ -440,6 +440,11 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       let thinkingMsgTs: string | null = null;
       // Current tool reaction emoji on the last batch message
       let currentToolEmoji: string | null = null;
+      // Every status emoji we've ever attempted to add — finally drains them all
+      // so a late callback can't leave a stuck reaction.
+      const statusEmojisAttempted = new Set<string>();
+      // Set true at the start of finally; further callbacks are no-ops after this.
+      let processingDone = false;
 
       try {
         const isOrchestrator = sessionType === "orchestrator";
@@ -490,6 +495,22 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           ),
         };
 
+        // Capture for closures — TS loses the !null narrowing inside nested fns.
+        const batchMsgs = batch;
+
+        // Helpers that gate on processingDone and remember every emoji we attempt
+        // to add, so the finally cleanup can drain everything (including late
+        // callbacks) without leaving stuck reactions.
+        function trackedAdd(emoji: string): void {
+          if (processingDone || !emoji) return;
+          statusEmojisAttempted.add(emoji);
+          addStatusReaction(client, batchMsgs, emoji).catch(() => {});
+        }
+        function trackedRemove(emoji: string): void {
+          if (!emoji) return;
+          removeStatusReaction(client, batchMsgs, emoji).catch(() => {});
+        }
+
         // Thinking indicator — posted when agent takes too long, deleted on first content
         // Also adds a 🤔 reaction on the last batch message alongside the text message.
         const thinkingCallbacks: AgentCallbacks = {
@@ -503,7 +524,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 thinkingMsgTs = res.ts ?? null;
               })
               .catch(() => {});
-            addStatusReaction(client, batch, emojis.thinking).catch(() => {});
+            trackedAdd(emojis.thinking);
           },
           onThinkingTick: (elapsedSec) => {
             if (thinkingMsgTs) {
@@ -523,11 +544,14 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 .catch(() => {});
               thinkingMsgTs = null;
             }
-            removeStatusReaction(client, batch, emojis.thinking).catch(() => {});
+            trackedRemove(emojis.thinking);
           },
         };
 
         // Tool use reactions — swap emoji on the last batch message as tools fire.
+        // MCP tools come through as `mcp__<server>__<tool>` and currently land in
+        // the generic bucket; a finer-grained mail/memory/scheduler split is a
+        // pending UX call (would need new EmojiConfig fields).
         function toolEmojiFor(toolName: string): string {
           const codingTools = new Set(["Read", "Write", "Edit", "Bash", "Glob", "Grep"]);
           const webTools = new Set(["WebFetch", "WebSearch"]);
@@ -536,19 +560,35 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           return emojis.toolGeneric;
         }
 
-        // Compaction — ✍ reaction on start, removed on end.
+        // Compaction — ✍ reaction on start; on end remove the reaction and, if
+        // the compaction failed, surface that explicitly so the user isn't left
+        // wondering why the next turn looks weird.
         const agentCallbacks: AgentCallbacks = {
           ...thinkingCallbacks,
           onToolUse: (toolName) => {
+            if (processingDone) return;
             const newEmoji = toolEmojiFor(toolName);
-            swapStatusReaction(client, batch, currentToolEmoji, newEmoji).catch(() => {});
+            // No-op if the same bucket; spares the API a remove+add round-trip
+            // (e.g. five consecutive Reads = one add, not ten swaps).
+            if (newEmoji === currentToolEmoji) return;
+            const previous = currentToolEmoji;
             currentToolEmoji = newEmoji;
+            statusEmojisAttempted.add(newEmoji);
+            swapStatusReaction(client, batchMsgs, previous, newEmoji).catch(() => {});
           },
           onCompactStart: () => {
-            addStatusReaction(client, batch, emojis.compacting).catch(() => {});
+            trackedAdd(emojis.compacting);
           },
-          onCompactEnd: () => {
-            removeStatusReaction(client, batch, emojis.compacting).catch(() => {});
+          onCompactEnd: (result) => {
+            trackedRemove(emojis.compacting);
+            if (result === "failed") {
+              client.chat
+                .postMessage({
+                  channel: channelId,
+                  text: ":warning: _Compaction failed_",
+                })
+                .catch(() => {});
+            }
           },
         };
 
@@ -638,13 +678,15 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           // Ignore
         }
       } finally {
-        // Clear processing emoji and any status reactions from batch messages
+        // Gate further callback adds — late tool_progress events shouldn't add
+        // reactions after we've started cleaning up.
+        processingDone = true;
         await clearProcessingEmoji(client, batch, emojis.processing);
-        await removeStatusReaction(client, batch, emojis.thinking).catch(() => {});
-        if (currentToolEmoji) {
-          await removeStatusReaction(client, batch, currentToolEmoji).catch(() => {});
+        // Remove every emoji we ever asked to add — covers the standard
+        // thinking/compacting paths plus any tool-bucket emojis swapped in.
+        for (const emoji of statusEmojisAttempted) {
+          await removeStatusReaction(client, batch, emoji).catch(() => {});
         }
-        await removeStatusReaction(client, batch, emojis.compacting).catch(() => {});
       }
 
       // Loop to check if more messages arrived while we were processing

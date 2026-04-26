@@ -168,9 +168,13 @@ export async function sendToAgent(
         }
       }
 
-      // Detect tool invocations
+      // Detect tool invocations. tool_progress is not in the SDK's exported
+      // message-type union yet; narrow via a typed local view.
       if (message.type === "tool_progress") {
-        callbacks.onToolUse?.((message as any).tool_name);
+        const toolName = (message as { tool_name?: unknown }).tool_name;
+        if (typeof toolName === "string" && toolName.length > 0) {
+          callbacks.onToolUse?.(toolName);
+        }
       }
 
       // Detect compaction status changes — pause thinking during compaction
