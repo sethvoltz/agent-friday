@@ -247,6 +247,16 @@ Builders and Helpers run as background loops in the daemon:
 
 On daemon restart, active agents are restored from the registry and their loops are resumed using stored session IDs.
 
+**Mail-delivery loop contract** (`src/agent/lifecycle.ts`):
+
+The outer agent loop runs a `query()` turn **only when `prompt` has been freshly assigned from real pending mail** (or on initial startup). After a turn completes:
+
+1. An inter-turn `buildMailPrompt()` check runs. If mail is found, `prompt` is set and the outer loop continues immediately.
+2. If no mail, the agent goes idle and enters an **inner wait loop** that repeatedly calls `waitForMail()` until mail actually arrives. The inner loop handles spurious wakeups (the 60-second fallback timer fires; a push event arrives for an already-processed message) by staying idle rather than falling through.
+3. Only when the inner loop finds pending mail does it set `prompt`, update status to `active`, and break out — allowing the outer loop to run the next turn.
+
+This invariant prevents stale-prompt reinjection: if the 60-second fallback timer fires and `buildMailPrompt()` returns null, the agent stays idle and does not re-run a query turn with the previous mail notification as the prompt.
+
 ### Scheduled Agents
 
 Scheduled agents run autonomous periodic tasks without orchestrator involvement. They support both recurring cron schedules and one-shot timed execution.
@@ -353,7 +363,7 @@ pnpm --filter @friday/cli exec vitest run src/commands/start.test.ts
 | `@friday/shared` | `config.test.ts`, `agents.test.ts`, `transcript.test.ts`, `inspect.test.ts` | Path derivation, defaults, deep merge, agent name validation, name building, JSONL transcript parsing, turn grouping, tool call tracking, formatting, agent inspection (path resolution, result building, plain/markdown formatting) |
 | `@friday/memory` | `store.test.ts`, `search.test.ts` | Memory CRUD, serialization roundtrip, recall tracking, hybrid search scoring, tag filtering, recall frequency boosting, event logging |
 | `@friday/cli` | `help.test.ts`, `services.test.ts`, 8× command tests | Help text, PID management, isRunning, parseServiceArg, findMonorepoRoot, all CLI commands including inspect, transcript, and schedule management |
-| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts`, `events/bus.test.ts`, `events/server.test.ts`, `scheduler/scheduler.test.ts`, `scheduler/trigger.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay, scheduler check loop and cron parsing, scheduled agent triggering and state injection |
+| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts`, `mail-poller.test.ts`, `lifecycle.test.ts`, `events/bus.test.ts`, `events/server.test.ts`, `scheduler/scheduler.test.ts`, `scheduler/trigger.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery, mail poller deduplication and push/poll delivery, agent loop idle-wait invariant (no stale-prompt reinjection), EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay, scheduler check loop and cron parsing, scheduled agent triggering and state injection |
 
 ### Conventions
 
