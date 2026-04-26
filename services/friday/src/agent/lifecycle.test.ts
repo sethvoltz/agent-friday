@@ -71,7 +71,9 @@ async function* makeSuccessResult(sessionId = "sess-test") {
 
 // ── Import under test (after mocks are set up) ─────────────────────────────
 
-const { createHelper } = await import("./lifecycle.js");
+const { createHelper, restoreActiveAgents } = await import("./lifecycle.js");
+
+const { listAgents } = await import("../sessions/registry.js");
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -96,7 +98,7 @@ describe("runAgentLoop idle-wait invariant", () => {
     // No mail ever — buildMailPrompt always returns null
     mockBuildMailPrompt.mockReturnValue(null);
 
-    createHelper({
+    await createHelper({
       name: "helper-idle-test",
       parent: "builder-test",
       taskId: null,
@@ -121,7 +123,7 @@ describe("runAgentLoop idle-wait invariant", () => {
   it("does not re-run query on repeated 60s timer firings with no mail", async () => {
     mockBuildMailPrompt.mockReturnValue(null);
 
-    createHelper({
+    await createHelper({
       name: "helper-timer-test",
       parent: "builder-test",
       taskId: null,
@@ -150,7 +152,7 @@ describe("runAgentLoop idle-wait invariant", () => {
       .mockReturnValueOnce(null)     // inter-turn check after turn 1 → go idle
       .mockReturnValueOnce(mailPrompt); // check after idle wakeup → run turn 2
 
-    createHelper({
+    await createHelper({
       name: "helper-mail-wakeup",
       parent: "builder-test",
       taskId: null,
@@ -177,7 +179,7 @@ describe("runAgentLoop idle-wait invariant", () => {
     // Both the inter-turn check and the idle wakeup check return null
     mockBuildMailPrompt.mockReturnValue(null);
 
-    createHelper({
+    await createHelper({
       name: "helper-processed-push",
       parent: "builder-test",
       taskId: null,
@@ -205,7 +207,7 @@ describe("runAgentLoop idle-wait invariant", () => {
       .mockReturnValueOnce(mailPrompt) // inter-turn check: mail found, continue
       .mockReturnValue(null);          // after turn 2: go idle, no more mail
 
-    createHelper({
+    await createHelper({
       name: "helper-inter-turn",
       parent: "builder-test",
       taskId: null,
@@ -225,5 +227,49 @@ describe("runAgentLoop idle-wait invariant", () => {
     // No more turns after 60s idle
     await vi.advanceTimersByTimeAsync(65_000);
     expect(mockQuery).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression test for the bug class this PR fixes: when an agent is resumed
+  // via restoreActiveAgents (i.e. with a stored sessionId from the registry),
+  // the idle loop must not re-run query() with a stale prompt just because the
+  // 60s fallback timer fires. Prior to the fix, the outer loop would re-enter
+  // with whatever `prompt` was last assigned, causing already-closed mail to
+  // be re-delivered to the agent.
+  it("resumed agent does not re-run query on idle timer firings without fresh mail", async () => {
+    mockBuildMailPrompt.mockReturnValue(null);
+
+    vi.mocked(listAgents).mockImplementation((filter?: any) => {
+      if (filter?.status === "active") {
+        return [{
+          name: "helper-resumed",
+          entry: {
+            type: "helper",
+            parent: "builder-test",
+            sessionId: "sess-resumed-abc",
+            status: "active",
+            taskId: null,
+            cwd: "/tmp/test",
+            createdAt: "2026-04-26T00:00:00Z",
+          },
+        }];
+      }
+      return [];
+    });
+
+    restoreActiveAgents("claude-test");
+
+    // First turn (the resume "check-in") should run exactly once.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+
+    // Confirm we resumed: query options should include resume: <sessionId>.
+    expect(mockQuery.mock.calls[0][0].options.resume).toBe("sess-resumed-abc");
+
+    // Fire the 60s fallback timer multiple times — no new mail, no re-run.
+    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(65_000);
+
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 });

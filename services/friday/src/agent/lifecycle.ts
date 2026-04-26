@@ -384,7 +384,8 @@ async function runAgentLoop(
       }
       // Spurious wakeup: 60s timer fired with no pending mail, or a push
       // event arrived for a message already processed. Stay idle.
-      log("info", "agent_loop_idle_spurious_wakeup", { agent: agentName });
+      // Logged at debug because every idle agent fires this once per minute.
+      log("debug", "agent_loop_idle_spurious_wakeup", { agent: agentName });
     }
   }
 
