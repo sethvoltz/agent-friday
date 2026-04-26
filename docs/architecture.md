@@ -35,7 +35,10 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/agent/agent-tools.ts` | Agent management MCP tools (`agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `worktree_add`, `worktree_remove`) |
 | `src/agent/lifecycle.ts` | Agent lifecycle — create/destroy Builders and Helpers, spawn/stop agent loops, restore on daemon restart |
 | `src/agent/workspace.ts` | Workspace and git worktree management for Builder agents |
-| `src/agent/prime.ts` | System prompt and first-turn prompt generation for typed agent sessions (Orchestrator, Builder, Helper) |
+| `src/agent/prime.ts` | System prompt and first-turn prompt generation for typed agent sessions (Orchestrator, Builder, Helper, Scheduled) |
+| `src/scheduler/scheduler.ts` | Scheduler loop — 30s interval checks for due scheduled agents, triggers execution, catches up missed runs on restart |
+| `src/scheduler/trigger.ts` | Scheduled agent execution — spawns fresh session, injects state from previous run, writes run metadata |
+| `src/scheduler/schedule-tools.ts` | Schedule management MCP tools (create, list, pause, resume, update, delete, trigger) |
 | `src/sessions/registry.ts` | Agent registry CRUD — persisted to `~/.friday/agents.json`, hierarchy enforcement, unique name enforcement, session tracking |
 | `src/sessions/manager.ts` | Channel → session ID mapping (in-memory + persisted to `~/.friday/sessions/channels.json`) |
 | `src/sessions/queue.ts` | Per-channel FIFO queue with edit/delete support, emoji lifecycle helpers; `QueuedMessage` carries optional image attachments |
@@ -57,7 +60,7 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 TypeScript types and utilities shared across services:
 
 - `config.ts` — `FridayConfig` type, default values, `loadConfig()` function, path constants
-- `agents.ts` — Agent types (`AgentType`, `AgentStatus`), registry types (`OrchestratorEntry`, `BuilderEntry`, `HelperEntry`), name validation
+- `agents.ts` — Agent types (`AgentType`, `AgentStatus`), registry types (`OrchestratorEntry`, `BuilderEntry`, `HelperEntry`, `ScheduledEntry`), schedule spec, name validation
 - `usage.ts` — `UsageEntry` type for the JSONL usage log
 - `transcript.ts` — Session JSONL transcript parser: parses Claude Code session files into structured turns, supports full parse and last-N-turns, streaming tail via `fs.watch`, and human-readable formatting
 - `inspect.ts` — Shared agent inspection logic: resolves agent → transcript path, builds structured `InspectResult`, formats as plain text or markdown. Used by CLI, Slack command, MCP tool, and dashboard.
@@ -169,6 +172,7 @@ All persistent state lives in `~/.friday/`:
 │   ├── entries/         — Memory entries as markdown with YAML frontmatter
 │   └── events.jsonl     — Memory operation audit log
 ├── beads/               — Beads task/epic tracker data
+├── schedules/           — Scheduled agent state directories (<name>/state.md, last-run.md)
 ├── usage.jsonl          — Per-turn usage log (cost, tokens, cache hits, duration)
 └── daemon.jsonl         — Daemon structured log (JSONL, teed from stdout)
 ```
@@ -203,24 +207,26 @@ Agent SDK sessions are stored by Claude Code in `~/.claude/projects/<encoded-cwd
 
 ## Agent Hierarchy
 
-Friday supports a three-tier agent model for orchestrating complex work:
+Friday supports a multi-tier agent model for orchestrating complex work:
 
 ```
 Orchestrator (singular, root)
 ├── Builder (long-lived, has workspace with worktrees)
 │   ├── Helper (short-lived, task-focused)
 │   └── Helper
-└── Builder
-    └── Helper
+├── Builder
+│   └── Helper
+└── Scheduled (autonomous, cron/one-shot, no parent)
 ```
 
 ### Agent Types
 
 | Type | Lifecycle | Creates | Capabilities |
 |------|----------|---------|-------------|
-| **Orchestrator** | Singleton, managed by Slack event handler | Builders, Helpers | Full tool access, Slack communication, agent management |
+| **Orchestrator** | Singleton, managed by Slack event handler | Builders, Helpers, Scheduled | Full tool access, Slack communication, agent management, schedule management |
 | **Builder** | Long-lived, daemon-managed loop | Helpers (not Builders) | Workspace with git worktrees, project-scoped work, plan-then-execute |
 | **Helper** | Short-lived, daemon-managed loop | Nothing | Single-task execution, reports to parent |
+| **Scheduled** | Autonomous, triggered by cron/one-shot | Nothing | Periodic autonomous work, escalation to orchestrator via mail |
 
 ### Agent Naming
 
@@ -241,6 +247,26 @@ Builders and Helpers run as background loops in the daemon:
 
 On daemon restart, active agents are restored from the registry and their loops are resumed using stored session IDs.
 
+### Scheduled Agents
+
+Scheduled agents run autonomous periodic tasks without orchestrator involvement. They support both recurring cron schedules and one-shot timed execution.
+
+**How they work:**
+1. The scheduler (`src/scheduler/scheduler.ts`) runs a 30-second `setInterval` that checks all non-paused scheduled agents
+2. If `nextRunAt <= now`, the scheduler triggers a fresh `query()` session with the agent's `taskPrompt`
+3. The agent executes its task, updates its state file, and exits. It goes dormant until the next trigger.
+4. If the agent encounters issues, it escalates via `mail_send` to the orchestrator
+
+**Run-to-run continuity:** Each scheduled agent has a state directory at `~/.friday/schedules/<name>/` containing:
+- `state.md` — free-form scratchpad the agent reads at run start and writes before finishing. Carries cursors, progress markers, partial results between runs.
+- `last-run.md` — auto-written metadata (timestamp, duration, session ID, status)
+
+**Key behaviors:**
+- New session each run (avoids ballooning context/cost)
+- Concurrent run guard — won't trigger if already running
+- One-shot schedules auto-pause after firing (preserve over delete)
+- Missed schedules on daemon restart catch up with at most one immediate execution
+
 ### MCP Tools
 
 Agents interact with the system via MCP tool servers injected into their sessions:
@@ -250,6 +276,7 @@ Agents interact with the system via MCP tool servers injected into their session
 | `friday-slack` | `slack_reply` | Orchestrator |
 | `friday-agents` | `agent_create`, `agent_list`, `agent_status`, `agent_destroy`, `agent_inspect`, `worktree_add`, `worktree_remove`, `workspace_cleanup` | Orchestrator, Builders (scoped to own children) |
 | `friday-mail` | `mail_send`, `mail_check`, `mail_read`, `mail_close` | All agent types |
+| `friday-scheduler` | `schedule_create`, `schedule_list`, `schedule_pause`, `schedule_resume`, `schedule_update`, `schedule_delete`, `schedule_trigger` | Orchestrator |
 | `friday-memory` | `memory_search`, `memory_save`, `memory_get`, `memory_forget` | Orchestrator, Bare sessions |
 
 ### Workspaces
@@ -283,6 +310,7 @@ Unified command-line interface for managing Friday. Provides both standalone com
 - `friday status` — checks PID files and health.json for service state
 - `friday inspect <agent>` — show last N turns from an agent's session transcript (supports `--turns N`, `--full`, `--follow/-f`, `--no-tools`)
 - `friday transcript <agent>` — export full session transcript as markdown (supports `--output <file>`)
+- `friday schedule` — manage scheduled agents (list, create, pause, resume, trigger, delete)
 
 **Service management:**
 - `friday start [service]` — start daemon, dashboard, or all (detached, PID tracked in `~/.friday/pids/`)
@@ -324,8 +352,8 @@ pnpm --filter @friday/cli exec vitest run src/commands/start.test.ts
 |---------|-----------|---------------|
 | `@friday/shared` | `config.test.ts`, `agents.test.ts`, `transcript.test.ts`, `inspect.test.ts` | Path derivation, defaults, deep merge, agent name validation, name building, JSONL transcript parsing, turn grouping, tool call tracking, formatting, agent inspection (path resolution, result building, plain/markdown formatting) |
 | `@friday/memory` | `store.test.ts`, `search.test.ts` | Memory CRUD, serialization roundtrip, recall tracking, hybrid search scoring, tag filtering, recall frequency boosting, event logging |
-| `@friday/cli` | `help.test.ts`, `services.test.ts`, 7× command tests | Help text, PID management, isRunning, parseServiceArg, findMonorepoRoot, all CLI commands including inspect and transcript |
-| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts`, `events/bus.test.ts`, `events/server.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay |
+| `@friday/cli` | `help.test.ts`, `services.test.ts`, 8× command tests | Help text, PID management, isRunning, parseServiceArg, findMonorepoRoot, all CLI commands including inspect, transcript, and schedule management |
+| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `agent-health.test.ts`, `mail.test.ts`, `mail-tools.test.ts`, `events/bus.test.ts`, `events/server.test.ts`, `scheduler/scheduler.test.ts`, `scheduler/trigger.test.ts` | FIFO queue ops, session persistence, Slack helpers, usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, system prompt generation, thinking indicator, MCP agent tools, boot preflight cleanup, agent health monitoring (stall/crash detection), mail CRUD and delivery, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay, scheduler check loop and cron parsing, scheduled agent triggering and state injection |
 
 ### Conventions
 

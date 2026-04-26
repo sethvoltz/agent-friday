@@ -99,6 +99,7 @@ export const load: LayoutServerLoad = async () => {
     if (entry.type === "orchestrator") return config.agent.workingDirectory;
     if (entry.type === "builder") return entry.workspace;
     if (entry.type === "helper") return entry.cwd;
+    if (entry.type === "scheduled") return entry.cwd;
     return null;
   }
 
@@ -126,6 +127,9 @@ export const load: LayoutServerLoad = async () => {
           turns: stats?.turns ?? 0,
         };
       })
+      // Drop sessions with no resolvable data — stale IDs whose transcript
+      // and usage are gone show as blank rows otherwise.
+      .filter((s) => s.firstAt)
       .sort((a, b) => b.lastAt.localeCompare(a.lastAt));
 
     const children: AgentTreeNode[] = [];

@@ -7,11 +7,19 @@ import {
   loadConfig,
   resolveTranscriptPath,
   parseTranscript,
+  getSessionDateRange,
   type AgentRegistry,
   type RegistryEntry,
   type UsageEntry,
   type Turn,
 } from "@friday/shared";
+
+export interface ScheduledRun {
+  sessionId: string;
+  firstAt: string;
+  lastAt: string;
+  isCurrent: boolean;
+}
 import type { PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -106,6 +114,53 @@ export const load: PageServerLoad = async ({ params }) => {
 
   const isFormer = requestedSessionId != null || (entry?.status === "destroyed");
 
+  // For scheduled agents, build the list of runs (current + formers) for the run picker.
+  let scheduledRuns: ScheduledRun[] | null = null;
+  if (entry?.type === "scheduled") {
+    const cwd = entry.cwd;
+    const currentSessionId = entry.sessionId;
+    const formerIds = entry.formerSessionIds ?? [];
+
+    // Build usage stats lookup for these sessions
+    const sessionStats = new Map<string, { firstAt: string; lastAt: string }>();
+    if (existsSync(USAGE_LOG_PATH)) {
+      const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
+      for (const line of lines) {
+        try {
+          const e: UsageEntry = JSON.parse(line);
+          if (e.sessionId === currentSessionId || formerIds.includes(e.sessionId)) {
+            const existing = sessionStats.get(e.sessionId);
+            if (existing) {
+              existing.lastAt = e.timestamp;
+            } else {
+              sessionStats.set(e.sessionId, { firstAt: e.timestamp, lastAt: e.timestamp });
+            }
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    const allIds = currentSessionId ? [currentSessionId, ...formerIds] : [...formerIds];
+    scheduledRuns = allIds.map((sid) => {
+      const stats = sessionStats.get(sid);
+      let firstAt = stats?.firstAt ?? "";
+      let lastAt = stats?.lastAt ?? "";
+      if (!firstAt) {
+        const range = getSessionDateRange(sid, cwd);
+        if (range) {
+          firstAt = range.firstAt;
+          lastAt = range.lastAt;
+        }
+      }
+      return {
+        sessionId: sid,
+        firstAt,
+        lastAt,
+        isCurrent: sid === currentSessionId,
+      };
+    });
+  }
+
   return {
     agentName: name,
     entry,
@@ -114,5 +169,6 @@ export const load: PageServerLoad = async ({ params }) => {
     totalTurns,
     stats,
     isFormer,
+    scheduledRuns,
   };
 };

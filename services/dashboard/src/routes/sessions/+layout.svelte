@@ -1,13 +1,12 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { invalidateAll } from '$app/navigation';
-  import { getLiveStatus, getConnection, getDataVersion } from '$lib/events.svelte';
+  import { getLiveStatus, getDataVersion } from '$lib/events.svelte';
   import type { AgentTreeNode, BareSessionGroup } from './+layout.server';
 
   let { data, children } = $props();
 
   let showHistory = $state(false);
-  const connection = $derived(getConnection());
 
   // Re-fetch sidebar data when SSE events arrive
   let lastVersion = $state(getDataVersion());
@@ -45,6 +44,7 @@
       case 'orchestrator': return '👑';
       case 'builder': return '🔨';
       case 'helper': return '⚡';
+      case 'scheduled': return '🕐';
       default: return '💬';
     }
   }
@@ -92,9 +92,9 @@
           >
             <span class="item-icon">{group.kind === 'dm' ? '💬' : '#'}</span>
             <span class="item-name">{group.label}</span>
-            {#if group.currentSessionStart}
-              <span class="item-date">{formatDateOpen(group.currentSessionStart)}</span>
-            {/if}
+            <span class="item-date">
+              {#if group.currentSessionStart}{formatDateOpen(group.currentSessionStart)}{/if}
+            </span>
             {#if currentSession}
               <span class="item-dot status-active">●</span>
             {:else}
@@ -120,13 +120,6 @@
     </div>
 
     <div class="sidebar-footer">
-      <div class="live-indicator">
-        {#if connection.connected}
-          <span class="live-dot connected">● Live</span>
-        {:else}
-          <span class="live-dot disconnected">○ Offline</span>
-        {/if}
-      </div>
       <button class="history-toggle" onclick={() => showHistory = !showHistory}>
         {showHistory ? 'Hide history' : 'Show history'}
       </button>
@@ -153,17 +146,15 @@
   >
     <span class="item-icon">{typeIcon(node.entry.type)}</span>
     <span class="item-name">{node.name}</span>
-    {#if node.currentSessionStart}
-      {#if node.entry.status === 'destroyed'}
-        <span class="item-date">{fmtDate(node.currentSessionStart)}</span>
-      {:else}
-        <span class="item-date">{formatDateOpen(node.currentSessionStart)}</span>
+    <span class="item-date">
+      {#if node.currentSessionStart}
+        {node.entry.status === 'destroyed' ? fmtDate(node.currentSessionStart) : formatDateOpen(node.currentSessionStart)}
       {/if}
-    {/if}
+    </span>
     <span class="item-dot {statusClass(getLiveStatus(node.name) ?? node.entry.status)}">{statusDot(getLiveStatus(node.name) ?? node.entry.status)}</span>
   </a>
 
-  {#if showHistory && node.formerSessions.length > 0}
+  {#if showHistory && node.formerSessions.length > 0 && node.entry.type !== 'scheduled'}
     {#each node.formerSessions as session}
       <a
         class="sidebar-item former depth-{depth}"
@@ -257,14 +248,11 @@
     opacity: 0.5;
   }
 
-  .sidebar-item.depth-1 { padding-left: 2rem; }
-  .sidebar-item.depth-2 { padding-left: 3rem; }
-
   .item-icon { font-size: 0.85rem; flex-shrink: 0; width: 1.1rem; text-align: center; }
   .item-icon-spacer { width: 1.1rem; flex-shrink: 0; }
-  .item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .item-date { font-size: 0.65rem; color: var(--text-tertiary); white-space: nowrap; }
-  .item-dot { flex-shrink: 0; font-size: 0.6rem; }
+  .item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item-date { flex-shrink: 0; font-size: 0.65rem; color: var(--text-tertiary); white-space: nowrap; }
+  .item-dot { flex-shrink: 0; font-size: 0.6rem; width: 0.8rem; text-align: center; }
 
   .status-active { color: var(--status-ok); }
   .status-idle { color: var(--text-tertiary); }
@@ -277,17 +265,6 @@
     flex-direction: column;
     gap: 0.5rem;
   }
-
-  .live-indicator {
-    text-align: center;
-  }
-
-  .live-dot {
-    font-size: 0.7rem;
-    font-weight: 500;
-  }
-  .live-dot.connected { color: var(--status-ok, #34d399); }
-  .live-dot.disconnected { color: var(--text-tertiary); }
 
   .history-toggle {
     width: 100%;

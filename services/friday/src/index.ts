@@ -17,6 +17,9 @@ import { buildSystemPrompt, chunkMessage } from "./slack/helpers.js";
 import { slackPreflight } from "./slack/preflight.js";
 import { createMemoryTools } from "./memory/memory-tools.js";
 import { buildMemoryContext } from "./memory/auto-recall.js";
+import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
+import { drainScheduledRuns } from "./scheduler/trigger.js";
+import { createScheduleTools } from "./scheduler/schedule-tools.js";
 
 async function main() {
   const startTime = Date.now();
@@ -49,6 +52,16 @@ async function main() {
     stopHealthHeartbeat();
     stopAgentHealthCheck();
     stopMailPoller();
+    stopScheduler();
+    // Wait for in-flight scheduled runs to abort cleanly before exiting.
+    // Without this, SIGTERM mid-run leaves orphan SDK subprocesses and stale "active" status.
+    try {
+      await drainScheduledRuns(10_000);
+    } catch (err) {
+      log("error", "scheduler_drain_error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     await stopEventServer();
     try {
       await app.stop();
@@ -127,6 +140,10 @@ async function main() {
             "friday-agents": agentMcp,
             "friday-mail": mailMcp,
             "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
+            "friday-scheduler": createScheduleTools({
+              model: config.agent.model,
+              defaultCwd: config.agent.workingDirectory,
+            }),
           },
           systemPrompt: buildSystemPrompt(
             config,
@@ -156,6 +173,9 @@ async function main() {
 
   // Restore agents that were active before shutdown
   restoreActiveAgents(config.agent.model);
+
+  // Start the scheduler for cron/one-shot scheduled agents
+  startScheduler({ model: config.agent.model });
 
   // Start agent health monitoring
   startAgentHealthCheck({ isAgentRunning });

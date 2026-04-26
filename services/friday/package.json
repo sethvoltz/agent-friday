@@ -16,6 +16,7 @@
     "@friday/shared": "workspace:*",
     "@slack/bolt": "^4.1.0",
     "@slack/web-api": "^7.15.1",
+    "cron-parser": "^5.5.0",
     "dotenv": "^16.4.0",
     "zod": "^4.0.0"
   },

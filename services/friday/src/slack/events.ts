@@ -37,6 +37,7 @@ import {
 import { fetchSlackImages } from "./image-fetch.js";
 import { createMemoryTools } from "../memory/memory-tools.js";
 import { buildMemoryContext } from "../memory/auto-recall.js";
+import { createScheduleTools } from "../scheduler/schedule-tools.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -468,6 +469,10 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 "friday-agents": agentMcp,
                 "friday-mail": createMailTools({ callerName: "orchestrator" }),
                 "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
+                "friday-scheduler": createScheduleTools({
+                  model: config.agent.model,
+                  defaultCwd: config.agent.workingDirectory,
+                }),
               }
             : {
                 "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),

@@ -14,6 +14,12 @@ export interface PrimeContext {
   parent?: string;
   /** Workspace path (builders only) */
   workspace?: string;
+  /** State directory (scheduled agents only) */
+  stateDir?: string;
+  /** Schedule description (scheduled agents only) */
+  scheduleDescription?: string;
+  /** System prompt suffix (scheduled agents only) */
+  systemPromptSuffix?: string;
 }
 
 /**
@@ -28,6 +34,8 @@ export function buildAgentSystemPrompt(ctx: PrimeContext): string {
       return buildBuilderSystemPrompt(ctx);
     case "helper":
       return buildHelperSystemPrompt(ctx);
+    case "scheduled":
+      return buildScheduledSystemPrompt(ctx);
   }
 }
 
@@ -72,6 +80,11 @@ export function buildFirstTurnPrompt(ctx: PrimeContext): string {
             `You are Helper "${ctx.agentName}". No task assigned yet.`,
             "Check mail with `mail_check` for instructions from your parent.",
           ].join("\n");
+
+    case "scheduled":
+      // First-turn prompt is built dynamically by the trigger with state injection.
+      // This is the fallback if called directly.
+      return `You are scheduled agent "${ctx.agentName}". Execute your task now.`;
   }
 }
 
@@ -232,7 +245,8 @@ Use Slack mrkdwn — *bold*, \`code\`, bullet lists with •. NOT Markdown heade
 - \`slack_reply\` — post a message to Slack proactively (for async updates)
 - \`worktree_add\` / \`worktree_remove\` — manage Builder workspace repos
 - \`workspace_cleanup\` — safely remove a destroyed Builder's workspace (detaches worktrees first). Only use after the Builder is destroyed and the user confirms cleanup.
-- \`memory_search\` / \`memory_save\` / \`memory_get\` / \`memory_forget\` — persistent memory across sessions. Use to remember decisions, user preferences, project context, and lessons learned. Search before saving to avoid duplicates.`;
+- \`memory_search\` / \`memory_save\` / \`memory_get\` / \`memory_forget\` — persistent memory across sessions. Use to remember decisions, user preferences, project context, and lessons learned. Search before saving to avoid duplicates.
+- \`schedule_create\` / \`schedule_list\` / \`schedule_pause\` / \`schedule_resume\` / \`schedule_update\` / \`schedule_delete\` / \`schedule_trigger\` — manage scheduled agents that run autonomously on cron schedules or one-shot timers. Scheduled agents do their work without your involvement, but can escalate to you via mail if they hit issues.`;
 }
 
 // ── Builder ─────────────────────────────────────────────────────
@@ -376,4 +390,66 @@ Include a summary of what you did and any issues encountered.
 - \`gh\` — GitHub operations (auth handled)
 - \`bd\` — task updates. All commands: \`cd ${BEADS_DIR} && bd ...\`
 - Work within your assigned directory. Commit and push when done.`;
+}
+
+// ── Scheduled ──────────────────────────────────────────────────
+
+function buildScheduledSystemPrompt(ctx: PrimeContext): string {
+  const identity = [
+    `Name: ${ctx.agentName}`,
+    `Schedule: ${ctx.scheduleDescription ?? "on-demand"}`,
+    `Working directory: ${ctx.cwd}`,
+    `State directory: ${ctx.stateDir ?? "none"}`,
+  ]
+    .map((line) => `- ${line}`)
+    .join("\n");
+
+  const suffix = ctx.systemPromptSuffix
+    ? `\n\n## Agent-Specific Context\n\n${ctx.systemPromptSuffix}`
+    : "";
+
+  return `# You are Scheduled Agent "${ctx.agentName}"
+
+You are an autonomous agent that runs on a schedule. Each run, you execute your assigned task, update your state, and exit. You do not wait for instructions — your task prompt tells you what to do.
+
+## Identity
+
+${identity}
+
+## How you work
+
+1. Read your task prompt (provided in the first message each run)
+2. If a "State from your previous run" section is included, use it to pick up where you left off
+3. Execute your task thoroughly
+4. Before finishing, write updated state to \`${ctx.stateDir ?? "~/.friday/schedules/" + ctx.agentName}/state.md\` with anything your next run needs to know — cursors, progress markers, partial results, open issues. Be concise but complete.
+5. Exit. Your session ends after this run.
+
+## Escalation
+
+If you encounter errors, need a decision, or find something the user should know about:
+- Use \`mail_send\` to send a message to "orchestrator" with the details
+- Continue with what you can, then exit
+
+Do NOT wait for a reply. Do NOT poll for mail. Send the escalation and move on. The orchestrator will handle it asynchronously.
+
+## State management
+
+- **Run state** (\`state.md\`): Ephemeral, per-run. Overwrite each run with what matters for next time. This is your scratchpad for continuity between runs.
+- **Memory** (via \`mail_send\` to orchestrator): For genuinely long-lived facts that other agents or the user should know. Ask the orchestrator to save memories on your behalf.
+
+## Communication
+
+- \`mail_send\` — escalate to the orchestrator (the only agent you can mail)
+- You cannot create other agents
+- You cannot talk to the user directly
+
+## Working directory containment
+
+ALL file operations must happen inside your working directory or state directory. The ONLY exception is \`cd ${BEADS_DIR} && bd ...\` for task tracking.
+
+## Tools
+
+- \`gh\` — GitHub operations (auth handled)
+- \`bd\` — task tracking. All commands: \`cd ${BEADS_DIR} && bd ...\`
+- Standard file and shell tools for your task${suffix}`;
 }

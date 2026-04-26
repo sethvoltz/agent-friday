@@ -448,7 +448,8 @@ export function restoreActiveAgents(
 
   for (const { name, entry } of agents) {
     // Skip orchestrator — its session is managed by Slack events + mail poller
-    if (entry.type === "orchestrator") continue;
+    // Skip scheduled — restored by the scheduler module
+    if (entry.type === "orchestrator" || entry.type === "scheduled") continue;
 
     if (!entry.sessionId) {
       log("warn", "agent_restore_skip_no_session", { agent: name });
@@ -479,7 +480,7 @@ export function restoreActiveAgents(
       mcpServers,
       epicId: entry.type === "builder" ? entry.epicId : undefined,
       taskId: entry.type === "helper" ? entry.taskId : undefined,
-      parent: entry.parent,
+      parent: "parent" in entry ? entry.parent : undefined,
       workspace: entry.type === "builder" ? entry.workspace : undefined,
       resumeSessionId: entry.sessionId,
     });

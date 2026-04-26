@@ -97,6 +97,7 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
 
   for (const { name, entry } of agents) {
     if (entry.type === "orchestrator") continue;
+    if (entry.type === "scheduled") continue; // Dormant between runs is normal
     if (entry.status === "destroyed") continue;
 
     const loopRunning = config.isAgentRunning(name);

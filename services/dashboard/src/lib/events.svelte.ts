@@ -14,6 +14,24 @@ let streamingText = $state<Record<string, string>>({});
 /** Counter that increments on any turn:complete or usage:logged — triggers invalidation */
 let dataVersion = $state(0);
 
+/** Debounce dataVersion bumps so event storms don't trigger a flood of invalidateAll() calls.
+ *  Each invalidation re-runs every load function on the page, which can include heavy
+ *  filesystem scans (transcripts, usage logs). Coalescing to ~500ms cuts that work dramatically.
+ */
+let pendingBump = false;
+let bumpTimer: ReturnType<typeof setTimeout> | null = null;
+const BUMP_DEBOUNCE_MS = 500;
+
+function bumpDataVersion(): void {
+  if (pendingBump) return;
+  pendingBump = true;
+  bumpTimer = setTimeout(() => {
+    pendingBump = false;
+    bumpTimer = null;
+    dataVersion++;
+  }, BUMP_DEBOUNCE_MS);
+}
+
 // ── EventSource management ───────────────────────────────────
 
 let eventSource: EventSource | null = null;
@@ -51,17 +69,17 @@ export function connectSSE(url: string): void {
   });
 
   eventSource.addEventListener("agent:created", () => {
-    dataVersion++;
+    bumpDataVersion();
   });
 
   eventSource.addEventListener("agent:destroyed", (e) => {
     const data = JSON.parse(e.data) as FridayEvent & { type: "agent:destroyed" };
     statusOverrides = { ...statusOverrides, [data.agentName]: "destroyed" };
-    dataVersion++;
+    bumpDataVersion();
   });
 
   eventSource.addEventListener("session:updated", () => {
-    dataVersion++;
+    bumpDataVersion();
   });
 
   eventSource.addEventListener("turn:streaming", (e) => {
@@ -74,11 +92,23 @@ export function connectSSE(url: string): void {
     // Clear streaming text for this agent — the completed turn will be in the refetched data
     const { [data.agentName]: _, ...rest } = streamingText;
     streamingText = rest;
-    dataVersion++;
+    bumpDataVersion();
   });
 
   eventSource.addEventListener("usage:logged", () => {
-    dataVersion++;
+    bumpDataVersion();
+  });
+
+  eventSource.addEventListener("schedule:triggered", () => {
+    bumpDataVersion();
+  });
+
+  eventSource.addEventListener("schedule:completed", () => {
+    bumpDataVersion();
+  });
+
+  eventSource.addEventListener("schedule:failed", () => {
+    bumpDataVersion();
   });
 }
 

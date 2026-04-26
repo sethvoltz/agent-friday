@@ -54,7 +54,8 @@ export function resolveTranscriptPath(
   const cwd =
     cwdOverride ??
     (entry.type === "builder" ? entry.workspace : null) ??
-    (entry.type === "helper" ? entry.cwd : null);
+    (entry.type === "helper" ? entry.cwd : null) ??
+    (entry.type === "scheduled" ? entry.cwd : null);
 
   if (!cwd) return null;
 
@@ -102,7 +103,8 @@ export function discoverSessions(cwd: string): Array<{ sessionId: string; mtime:
 
 /**
  * Get the first and last timestamp from a session JSONL file.
- * Reads only the first and last lines for efficiency.
+ * Reads only the head and tail of the file (no full load) — transcripts
+ * can be many MB and are read on every dashboard load.
  */
 export function getSessionDateRange(
   sessionId: string,
@@ -114,26 +116,53 @@ export function getSessionDateRange(
   const jsonlPath = join(dir, `${sessionId}.jsonl`);
   if (!existsSync(jsonlPath)) return null;
 
+  const HEAD_BYTES = 4096;
+  const TAIL_BYTES = 8192;
+
+  let fd: number | null = null;
   try {
-    const content = readFileSync(jsonlPath, "utf-8");
-    const lines = content.split("\n").filter((l) => l.trim());
-    if (lines.length === 0) return null;
+    const { statSync, openSync, readSync, closeSync } = require("node:fs") as typeof import("node:fs");
+    const stat = statSync(jsonlPath);
+    if (stat.size === 0) return null;
 
+    fd = openSync(jsonlPath, "r");
+
+    // Read head
+    const headLen = Math.min(HEAD_BYTES, stat.size);
+    const headBuf = Buffer.alloc(headLen);
+    readSync(fd, headBuf, 0, headLen, 0);
+    const headText = headBuf.toString("utf-8");
+
+    // Read tail (may overlap with head for small files — that's fine)
+    const tailStart = Math.max(0, stat.size - TAIL_BYTES);
+    const tailLen = stat.size - tailStart;
+    const tailBuf = Buffer.alloc(tailLen);
+    readSync(fd, tailBuf, 0, tailLen, tailStart);
+    const tailText = tailBuf.toString("utf-8");
+
+    closeSync(fd);
+    fd = null;
+
+    // Find the first complete JSON line in the head
     let firstAt = "";
-    let lastAt = "";
-
-    // Scan from start for first timestamp
-    for (const line of lines) {
+    for (const line of headText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
       try {
-        const entry = JSON.parse(line);
+        const entry = JSON.parse(trimmed);
         if (entry.timestamp) { firstAt = entry.timestamp; break; }
-      } catch { /* skip */ }
+      } catch { /* incomplete first line, keep looking */ }
     }
 
-    // Scan from end for last timestamp
-    for (let i = lines.length - 1; i >= 0; i--) {
+    // Find the last complete JSON line in the tail (skip partial first line if tail doesn't start at 0)
+    let lastAt = "";
+    const tailLines = tailText.split("\n");
+    const startIdx = tailStart === 0 ? 0 : 1; // skip potentially-truncated first chunk
+    for (let i = tailLines.length - 1; i >= startIdx; i--) {
+      const trimmed = tailLines[i].trim();
+      if (!trimmed) continue;
       try {
-        const entry = JSON.parse(lines[i]);
+        const entry = JSON.parse(trimmed);
         if (entry.timestamp) { lastAt = entry.timestamp; break; }
       } catch { /* skip */ }
     }
@@ -141,6 +170,9 @@ export function getSessionDateRange(
     if (!firstAt) return null;
     return { firstAt, lastAt: lastAt || firstAt };
   } catch {
+    if (fd != null) {
+      try { (require("node:fs") as typeof import("node:fs")).closeSync(fd); } catch { /* ignore */ }
+    }
     return null;
   }
 }

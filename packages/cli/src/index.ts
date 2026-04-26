@@ -12,6 +12,7 @@ import { inspectCommand } from "./commands/inspect.js";
 import { transcriptCommand } from "./commands/transcript.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { setupCommand } from "./commands/setup.js";
+import { scheduleCommand } from "./commands/schedule.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -100,6 +101,11 @@ switch (command) {
       console.error(err.message);
       process.exit(1);
     });
+    break;
+
+  case "schedule":
+    if (hasHelpFlag(commandArgs)) { showHelp("schedule"); break; }
+    scheduleCommand(commandArgs);
     break;
 
   default:

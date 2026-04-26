@@ -13,6 +13,9 @@
     "test": "vitest run",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "cron-parser": "^5.5.0"
+  },
   "devDependencies": {
     "typescript": "^5.7.0"
   }
