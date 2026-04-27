@@ -21,39 +21,52 @@ beforeEach(() => {
 });
 
 describe("seedScheduledMetaAgents", () => {
-  it("creates scheduled-meta-daily when missing", () => {
+  it("creates both daily and weekly meta agents when missing", () => {
     vi.mocked(getAgent).mockReturnValue(undefined);
 
     seedScheduledMetaAgents({ cwd: "/tmp/wd" });
 
-    expect(registerScheduledAgent).toHaveBeenCalledTimes(1);
-    const [name, schedule, taskPrompt, cwd] = vi.mocked(registerScheduledAgent).mock.calls[0];
-    expect(name).toBe("scheduled-meta-daily");
-    expect(schedule).toEqual({ cron: "0 4 * * *" });
-    expect(taskPrompt).toContain("friday-evolve scan");
-    expect(taskPrompt).toContain("mail_send");
-    expect(taskPrompt).toContain("priority=\"urgent\"");
-    expect(cwd).toBe("/tmp/wd");
+    expect(registerScheduledAgent).toHaveBeenCalledTimes(2);
+    const calls = vi.mocked(registerScheduledAgent).mock.calls;
+
+    const daily = calls.find((c) => c[0] === "scheduled-meta-daily");
+    expect(daily).toBeDefined();
+    expect(daily![1]).toEqual({ cron: "0 4 * * *" });
+    expect(daily![2]).toContain("friday-evolve scan");
+    expect(daily![2]).toContain("mail_send");
+    expect(daily![2]).toContain("priority=\"urgent\"");
+
+    const weekly = calls.find((c) => c[0] === "scheduled-meta-weekly");
+    expect(weekly).toBeDefined();
+    expect(weekly![1]).toEqual({ cron: "0 5 * * 0" });
+    expect(weekly![2]).toContain("friday-evolve cluster");
+    expect(weekly![2]).toContain("--since-hours 168");
   });
 
-  it("is a no-op when scheduled-meta-daily already exists", () => {
-    vi.mocked(getAgent).mockReturnValue({
-      type: "scheduled",
-      sessionId: null,
-      status: "idle",
-      createdAt: "2026-04-26T00:00:00.000Z",
-      schedule: { cron: "0 4 * * *" },
-      taskPrompt: "stale prompt",
-      cwd: "/tmp/wd",
-      stateDir: "/tmp/state",
-      lastRunAt: null,
-      nextRunAt: null,
-      paused: false,
+  it("only seeds the missing one when daily already exists", () => {
+    vi.mocked(getAgent).mockImplementation((name: string) => {
+      if (name === "scheduled-meta-daily") {
+        return {
+          type: "scheduled",
+          sessionId: null,
+          status: "idle",
+          createdAt: "2026-04-26T00:00:00.000Z",
+          schedule: { cron: "0 4 * * *" },
+          taskPrompt: "stale prompt",
+          cwd: "/tmp/wd",
+          stateDir: "/tmp/state",
+          lastRunAt: null,
+          nextRunAt: null,
+          paused: false,
+        };
+      }
+      return undefined;
     });
 
     seedScheduledMetaAgents({ cwd: "/tmp/wd" });
 
-    expect(registerScheduledAgent).not.toHaveBeenCalled();
+    expect(registerScheduledAgent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(registerScheduledAgent).mock.calls[0][0]).toBe("scheduled-meta-weekly");
   });
 
   it("swallows registration errors so the daemon keeps booting", () => {

@@ -3,10 +3,14 @@ import { loadConfig } from "@friday/shared";
 import {
   listProposals,
   scanDaemonLog,
+  scanFeedback,
+  scanUsageLog,
+  scanTranscripts,
   sinceHoursAgo,
   proposeFromSignals,
   rerankAll,
   appendRun,
+  mergeClusters,
 } from "./index.js";
 
 const args = process.argv.slice(2);
@@ -19,6 +23,7 @@ function help(): void {
       "",
       "Usage:",
       "  friday-evolve scan [--since-hours N]      Run scan + propose + rerank, write a run record.",
+      "  friday-evolve cluster                     Re-cluster open proposals via Jaccard merge.",
       "  friday-evolve list [--status STATUS]      List proposals (optionally filter by status).",
       "  friday-evolve show <id>                   Print a single proposal as JSON.",
       "  friday-evolve help                        Show this help.",
@@ -52,7 +57,12 @@ async function main(): Promise<void> {
     const now = new Date();
     const since = sinceHoursAgo(hours, now);
 
-    const signals = scanDaemonLog({ since });
+    const signals = [
+      ...scanDaemonLog({ since }),
+      ...scanFeedback({ since }),
+      ...scanUsageLog({ since }),
+      ...scanTranscripts({ since }),
+    ];
     const result = proposeFromSignals(signals, {
       rule: config.evolve,
       createdBy: process.env.FRIDAY_AGENT_NAME ?? "cli",
@@ -71,6 +81,18 @@ async function main(): Promise<void> {
     };
     appendRun(record);
 
+    console.log(JSON.stringify(record, null, 2));
+    return;
+  }
+
+  if (cmd === "cluster") {
+    const merged = mergeClusters();
+    const record = {
+      ts: new Date().toISOString(),
+      clustersCreated: merged.clustersCreated.length,
+      clustersUpdated: merged.clustersUpdated.length,
+      proposalsAttached: merged.proposalsAttached,
+    };
     console.log(JSON.stringify(record, null, 2));
     return;
   }

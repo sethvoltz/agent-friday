@@ -48,7 +48,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/monitor/agent-health.ts` | Periodic agent health checks — detects stalled agents (no turn progress) and crashed agents (loop exited but status active). Notifies orchestrator via mail. |
 | `src/memory/memory-tools.ts` | Memory MCP tools (`memory_search`, `memory_save`, `memory_update`, `memory_get`, `memory_forget`) for Orchestrator and Bare sessions |
 | `src/memory/auto-recall.ts` | Builds a `<memory-context>` block prepended to each Orchestrator/Bare prompt — runs hybrid keyword search and embeds top-N entries verbatim so the agent never has to call `memory_search` first |
-| `src/evolve/seed.ts` | Boot-time idempotent seed of the `scheduled-meta-daily` agent (cron `0 4 * * *`) that runs the evolve pipeline and escalates criticals to the orchestrator |
+| `src/evolve/seed.ts` | Boot-time idempotent seed of the `scheduled-meta-daily` (cron `0 4 * * *`) and `scheduled-meta-weekly` (cron `0 5 * * 0`) agents — daily 24h scan + escalation, weekly 7-day scan + Jaccard re-cluster |
+| `src/slack/feedback.ts` | Appender for `~/.friday/evolve/feedback.jsonl` — wired into the existing `message_changed` / `message_deleted` Slack handlers, no new scopes needed |
 | `src/evolve/evolve-tools.ts` | Evolve MCP tools (`evolve_list`, `evolve_show`, `evolve_approve`, `evolve_reject`, `evolve_summarize_critical`) for the orchestrator |
 | `src/slack/preflight.ts` | Boot-time Slack cleanup — patches interrupted messages and removes dangling emoji reactions from previous crashes |
 | `src/slack/image-fetch.ts` | Authenticated download of Slack private image files; returns base64-encoded `ImageAttachment[]` |
@@ -82,14 +83,23 @@ Persistent knowledge store for Orchestrator and Bare sessions. Memories are file
 Self-improvement pipeline. Scans Friday's own logs for recurring pain (crashes, loop errors, scheduled-run failures), buckets by stable hash, and writes ranked proposals to `~/.friday/evolve/proposals/` for the user to approve, reject, or apply.
 
 - `store.ts` — `Proposal` CRUD with markdown frontmatter; `Signal` payload serialized as inline JSON. Status lifecycle: `open → critical → approved → applied` (or `→ rejected`).
-- `scan.ts` — Deterministic scanner over `~/.friday/daemon.jsonl`. Self-excludes events from `scheduled-meta-*` agents to prevent feedback loops.
+- `scan.ts` — Deterministic scanners over four sources, all self-excluding `scheduled-meta-*` activity to prevent feedback loops:
+  - `scanDaemonLog()` — daemon events (crashes, loop errors, scheduled-run failures).
+  - `scanFeedback()` — `~/.friday/evolve/feedback.jsonl` (Slack edit/delete + 3+ edits to the same message → `slack_retry_burst`).
+  - `scanUsageLog()` — per-agent token-spike detection (single turn ≥ 4× the agent's median).
+  - `scanTranscripts()` — consecutive user messages within 5 min with cosine token-overlap ≥ 0.6 (retry detection).
 - `rank.ts` — Pure scoring: severity floor + log2 frequency + distinct-signal boost − blast-radius penalty. `isCritical()` requires score ≥ 80 AND (high severity OR count ≥ 5).
 - `propose.ts` — Merges new occurrences into existing open proposals by signal hash; creates fresh ones for new hashes. `rerankAll()` recomputes scores at end of run.
+- `clusters.ts` — `mergeClusters()` runs Jaccard overlap (≥ 0.5 default) on signal-hash sets across open proposals; uses union-find to collapse groups; writes one cluster file per component to `~/.friday/evolve/clusters/<id>.md` and stamps `clusterId` on members. Non-destructive: proposal ids are preserved.
 - `apply.ts` — `applyProposal()` materializes `memory` proposals via `@friday/memory.saveEntry`, writes `prompt` proposals to `config.json` `agent.systemPrompt`, and deep-merges `config` proposals (JSON body) into `config.json`. A self-modification guard refuses prompt/config changes targeting any `scheduled-meta-*` agent. `code` proposals are recorded as approved but defer to Phase 5 (Beads dispatch).
 - `runs.ts` — Per-run audit log at `~/.friday/evolve/runs.jsonl`.
-- `cli.ts` — `friday-evolve scan|list|show` invoked by the daily meta-agent.
+- `cli.ts` — `friday-evolve scan|cluster|list|show` invoked by the meta-agents.
 
-The `scheduled-meta-daily` agent (seeded at boot, cron `0 4 * * *`) runs the CLI and mails the orchestrator urgently if any proposals are critical. The orchestrator surfaces them via `friday-evolve` MCP tools.
+Two meta-agents are seeded idempotently at daemon boot:
+- `scheduled-meta-daily` (cron `0 4 * * *`) — 24h scan over all four sources; mails the orchestrator urgently when criticals exist.
+- `scheduled-meta-weekly` (cron `0 5 * * 0`) — 7-day scan + Jaccard re-cluster; surfaces slow-burn patterns the daily run misses.
+
+The orchestrator surfaces proposals via `friday-evolve` MCP tools.
 
 ### Dashboard (`services/dashboard`)
 
