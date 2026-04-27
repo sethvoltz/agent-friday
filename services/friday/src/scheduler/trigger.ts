@@ -216,7 +216,7 @@ async function runScheduledTask(
             cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
             turnNumber,
             durationMs,
-          });
+          }, name);
         } else {
           log("error", "scheduled_turn_failed", {
             agent: name,

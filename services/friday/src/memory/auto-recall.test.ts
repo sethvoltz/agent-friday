@@ -12,6 +12,7 @@ vi.mock("node:os", async () => {
 
 const { saveEntry, ensureMemoryDirs } = await import("@friday/memory");
 const { buildMemoryContext } = await import("./auto-recall.js");
+const { closeDb } = await import("@friday/shared");
 
 describe("buildMemoryContext", () => {
   beforeEach(() => {
@@ -20,6 +21,7 @@ describe("buildMemoryContext", () => {
   });
 
   afterEach(() => {
+    closeDb();
     rmSync(testDir, { recursive: true, force: true });
   });
 

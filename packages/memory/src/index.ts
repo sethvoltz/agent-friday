@@ -8,6 +8,7 @@ export {
   forgetEntry,
   listEntries,
   touchRecall,
+  reconcileMemories,
 } from "./store.js";
 
 export {

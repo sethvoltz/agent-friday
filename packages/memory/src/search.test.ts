@@ -12,6 +12,7 @@ vi.mock("node:os", async () => {
 
 const { saveEntry, ensureMemoryDirs } = await import("./store.js");
 const { searchMemories } = await import("./search.js");
+const { closeDb } = await import("@friday/shared");
 
 describe("memory search", () => {
   beforeEach(() => {
@@ -39,6 +40,7 @@ describe("memory search", () => {
   });
 
   afterEach(() => {
+    closeDb();
     rmSync(testDir, { recursive: true, force: true });
   });
 

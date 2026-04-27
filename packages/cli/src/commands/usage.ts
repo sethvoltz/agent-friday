@@ -1,5 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
-import { USAGE_LOG_PATH, type UsageEntry } from "@friday/shared";
+import { getAllUsageEntries, type UsageEntryRow } from "@friday/shared";
 
 interface PeriodStats {
   turns: number;
@@ -11,25 +10,8 @@ interface PeriodStats {
   durationMs: number;
 }
 
-function loadEntries(): UsageEntry[] {
-  if (!existsSync(USAGE_LOG_PATH)) {
-    console.error(`No usage log found at ${USAGE_LOG_PATH}`);
-    process.exit(1);
-  }
-
-  const lines = readFileSync(USAGE_LOG_PATH, "utf-8")
-    .split("\n")
-    .filter((l) => l.trim());
-
-  const entries: UsageEntry[] = [];
-  for (const line of lines) {
-    try {
-      entries.push(JSON.parse(line) as UsageEntry);
-    } catch {
-      // Skip malformed lines
-    }
-  }
-  return entries;
+function loadEntries(): UsageEntryRow[] {
+  return getAllUsageEntries();
 }
 
 function formatCost(usd: number): string {
@@ -47,7 +29,7 @@ function formatDuration(ms: number): string {
   return `${hours}h ${remainingMinutes}m`;
 }
 
-function computeStats(entries: UsageEntry[]): PeriodStats {
+function computeStats(entries: UsageEntryRow[]): PeriodStats {
   let cost = 0, inputTokens = 0, outputTokens = 0;
   let cacheCreationTokens = 0, cacheReadTokens = 0, durationMs = 0;
 
@@ -57,7 +39,7 @@ function computeStats(entries: UsageEntry[]): PeriodStats {
     outputTokens += e.outputTokens;
     cacheCreationTokens += e.cacheCreationTokens;
     cacheReadTokens += e.cacheReadTokens;
-    durationMs += e.durationMs;
+    durationMs += e.durationMs ?? 0;
   }
 
   return { turns: entries.length, cost, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, durationMs };

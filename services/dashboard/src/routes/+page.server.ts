@@ -2,12 +2,11 @@ import { readFileSync, existsSync } from "node:fs";
 import {
   loadConfig,
   CONFIG_PATH,
-  USAGE_LOG_PATH,
   SESSIONS_DIR,
   AGENTS_PATH,
   FRIDAY_DIR,
   resolveTranscriptPath,
-  type UsageEntry,
+  getAllUsageEntries,
   type AgentRegistry,
   type RegistryEntry,
 } from "@friday/shared";
@@ -59,33 +58,15 @@ function estimateCostFromTranscript(
   }
 }
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ parent }) => {
   const config = loadConfig();
 
-  // Usage entries
-  const usageEntries: UsageEntry[] = [];
-  if (existsSync(USAGE_LOG_PATH)) {
-    const lines = readFileSync(USAGE_LOG_PATH, "utf-8")
-      .split("\n")
-      .filter((l) => l.trim());
-    for (const line of lines) {
-      try {
-        usageEntries.push(JSON.parse(line));
-      } catch {
-        // skip
-      }
-    }
-  }
+  // Usage entries — pulled from the SQLite `usage` table.
+  const usageEntries = getAllUsageEntries();
 
-  // Agent registry
-  let agents: AgentRegistry = {};
-  if (existsSync(AGENTS_PATH)) {
-    try {
-      agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
-    } catch {
-      // skip
-    }
-  }
+  // Agent registry — inherited from the root layout to avoid re-reading
+  // agents.json on every navigation.
+  const { agents } = await parent();
 
   // Per-agent cost: map sessionId → agentName, sum usage, fallback to transcript estimate
   const sessionToAgent = new Map<string, string>();
@@ -169,11 +150,10 @@ export const load: PageServerLoad = async () => {
     activityByDate[day].cost += e.costUsd ?? 0;
   }
 
+  // `agents` is supplied by the root layout via parent() — don't re-emit it.
   return {
     usageEntries,
-    agents,
     agentCosts,
-
     stateFiles,
     activityByDate,
   };

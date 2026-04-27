@@ -1,24 +1,17 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { error } from "@sveltejs/kit";
-import {
-  AGENTS_PATH,
-  type AgentRegistry,
-  type ScheduledEntry,
-} from "@friday/shared";
+import type { ScheduledEntry } from "@friday/shared";
+import type { PageServerLoad } from "./$types";
 
-export function load({ params }: { params: { name: string } }): {
+export const load: PageServerLoad = async ({ params, parent }): Promise<{
   name: string;
   entry: ScheduledEntry;
   stateContent: string | null;
   lastRunContent: string | null;
-} {
-  let agents: AgentRegistry = {};
-  if (existsSync(AGENTS_PATH)) {
-    try {
-      agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
-    } catch { /* skip */ }
-  }
+}> => {
+  // Registry inherited from the root layout.
+  const { agents } = await parent();
 
   const entry = agents[params.name];
   if (!entry || entry.type !== "scheduled") {
@@ -50,4 +43,4 @@ export function load({ params }: { params: { name: string } }): {
     stateContent,
     lastRunContent,
   };
-}
+};

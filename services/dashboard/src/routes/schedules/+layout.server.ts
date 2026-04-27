@@ -1,9 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
-import {
-  AGENTS_PATH,
-  type AgentRegistry,
-  type ScheduledEntry,
-} from "@friday/shared";
+import type { ScheduledEntry } from "@friday/shared";
 import type { LayoutServerLoad } from "./$types";
 
 export interface ScheduleListItem {
@@ -11,13 +6,9 @@ export interface ScheduleListItem {
   entry: ScheduledEntry;
 }
 
-export const load: LayoutServerLoad = async () => {
-  let agents: AgentRegistry = {};
-  if (existsSync(AGENTS_PATH)) {
-    try {
-      agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
-    } catch { /* skip */ }
-  }
+export const load: LayoutServerLoad = async ({ parent }) => {
+  // Registry inherited from the root layout.
+  const { agents } = await parent();
 
   const schedules: ScheduleListItem[] = [];
   for (const [name, entry] of Object.entries(agents)) {

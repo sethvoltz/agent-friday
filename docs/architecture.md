@@ -194,21 +194,60 @@ All persistent state lives in `~/.friday/`:
 ├── .env                 — Secrets (SLACK_APP_TOKEN, SLACK_BOT_TOKEN)
 ├── health.json          — Daemon heartbeat (pid, uptime, last beat, eventServerPort). Present = running.
 ├── agents.json          — Agent registry (type, status, session IDs, parent/children, workspace)
+├── friday.db            — SQLite (WAL): usage log, memory FTS5 index, transcript index, db_meta
 ├── sessions/
-│   └── channels.json    — Channel ID → Agent SDK session ID mapping
+│   ├── channels.json    — Channel ID → Agent SDK session ID mapping (atomic writes)
+│   └── channel-history.json — Former session IDs by channel
 ├── working/
 │   └── workspaces/      — Builder workspaces with git worktrees
 ├── repos/               — Bare clone cache for remote repos (<org>/<repo>/)
 ├── memory/
-│   ├── entries/         — Memory entries as markdown with YAML frontmatter
+│   ├── entries/         — Memory entries as markdown (source of truth — DB mirrors for FTS5)
 │   └── events.jsonl     — Memory operation audit log
 ├── beads/               — Beads task/epic tracker data
 ├── schedules/           — Scheduled agent state directories (<name>/state.md, last-run.md)
-├── usage.jsonl          — Per-turn usage log (cost, tokens, cache hits, duration)
+├── usage.jsonl.migrated-<date> — Archived JSONL log (renamed after migration; see Database layer)
 └── daemon.jsonl         — Daemon structured log (JSONL, teed from stdout)
 ```
 
 Agent SDK sessions are stored by Claude Code in `~/.claude/projects/<encoded-cwd>/`.
+
+## Database Layer
+
+`~/.friday/friday.db` is a SQLite database (WAL mode) opened concurrently by
+the daemon and the dashboard process. Schema lives in
+`packages/shared/src/db/schema.ts` (Drizzle); migrations are generated under
+`packages/shared/drizzle/` and applied on first DB open per process via
+`runMigrations()`.
+
+**Tables:**
+
+| Table | Purpose | Source of truth |
+|---|---|---|
+| `usage` | Per-turn cost / tokens / model. Replaces `usage.jsonl`. | DB |
+| `memories` | Mirror of `memory/entries/*.md` plus DB-only `recall_count` / `last_recalled_at`. Backed by `memories_fts` (FTS5 virtual table) for keyword search. | `.md` files |
+| `transcript_index` | First/last timestamp + mtime per `~/.claude/projects/**/<sessionId>.jsonl`. Lets the dashboard avoid per-session partial reads. | SDK JSONL files |
+| `db_meta` | Generic key/value (e.g. `memories.last_reconciled_at`). | DB |
+
+**Boundaries:** opaque operational data (usage rows) lives in the DB. User-
+editable files (`config.json`, `agents.json`, `*.md`) stay as files; the DB
+holds *derived* indexes for them and reconciles via mtime. SDK-owned
+transcripts (`~/.claude/projects/`) are never moved — only indexed.
+
+**Reconciliation:**
+- Memory entries: walk `entries/*.md` on daemon boot; upsert files whose
+  mtime is past the saved `db_meta.memories.last_reconciled_at - 60s`
+  overlap window; delete DB rows whose `.md` is gone.
+- Transcript index: same pattern, plus a 5-minute background interval and
+  a live-session skip guard (sessions in the registry are still being
+  written by the SDK).
+
+**Cache invalidation across processes:** the existing `eventBus` SSE channel
+(`usage:logged`) lets the dashboard invalidate views when the daemon writes;
+WAL handles same-DB read-after-write within a process.
+
+Legacy `usage.jsonl` is imported once on first daemon boot, then the source
+file is renamed to `usage.jsonl.migrated-<YYYY-MM-DD>` and never read again.
 
 ## Slack Connection
 

@@ -2,11 +2,11 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import {
-  USAGE_LOG_PATH,
   SESSIONS_DIR,
   FRIDAY_DIR,
   parseTranscript,
-  type UsageEntry,
+  findMostRecentSession,
+  getSessionStats,
   type Turn,
 } from "@friday/shared";
 import type { PageServerLoad } from "./$types";
@@ -42,21 +42,10 @@ export const load: PageServerLoad = async ({ params }) => {
     }
   }
 
-  // If still no session, find most recent from usage
-  if (!sessionId && existsSync(USAGE_LOG_PATH)) {
-    const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-    let latest: { sessionId: string; timestamp: string } | null = null;
-    for (const line of lines) {
-      try {
-        const e: UsageEntry = JSON.parse(line);
-        if (e.channelId === channelId && e.sessionType === "bare") {
-          if (!latest || e.timestamp > latest.timestamp) {
-            latest = { sessionId: e.sessionId, timestamp: e.timestamp };
-          }
-        }
-      } catch { /* skip */ }
-    }
-    if (latest) sessionId = latest.sessionId;
+  // If still no session, find most recent bare session from the usage table
+  if (!sessionId) {
+    const recent = findMostRecentSession(channelId, "bare");
+    if (recent) sessionId = recent.sessionId;
   }
 
   // Load transcript — bare sessions use the daemon's working directory as CWD
@@ -87,26 +76,18 @@ export const load: PageServerLoad = async ({ params }) => {
     }
   }
 
-  // Session stats
+  // Session stats — single aggregation query
   let stats: { turns: number; cost: number; firstAt: string; lastAt: string } | null = null;
-  if (sessionId && existsSync(USAGE_LOG_PATH)) {
-    const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-    let turnCount = 0;
-    let cost = 0;
-    let firstAt = "";
-    let lastAt = "";
-    for (const line of lines) {
-      try {
-        const e: UsageEntry = JSON.parse(line);
-        if (e.sessionId === sessionId) {
-          turnCount++;
-          cost += e.costUsd ?? 0;
-          if (!firstAt) firstAt = e.timestamp;
-          lastAt = e.timestamp;
-        }
-      } catch { /* skip */ }
+  if (sessionId) {
+    const dbStats = getSessionStats(sessionId);
+    if (dbStats) {
+      stats = {
+        turns: dbStats.turnCount,
+        cost: dbStats.totalCostUsd,
+        firstAt: dbStats.firstTurnAt,
+        lastAt: dbStats.lastTurnAt,
+      };
     }
-    if (turnCount > 0) stats = { turns: turnCount, cost, firstAt, lastAt };
   }
 
   const isFormer = requestedSessionId != null;

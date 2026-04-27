@@ -1,4 +1,8 @@
+import { getDb } from "@friday/shared";
+import { reconcileMemories } from "@friday/memory";
 import { loadRuntimeConfig } from "./config.js";
+import { migrateUsageLog } from "./monitor/usage.js";
+import { startTranscriptIndexer, stopTranscriptIndexer } from "./monitor/transcript-indexer.js";
 import { createSlackApp } from "./slack/app.js";
 import { registerEventHandlers } from "./slack/events.js";
 import { loadSessions } from "./sessions/manager.js";
@@ -29,6 +33,12 @@ async function main() {
   log("info", "friday_starting", {});
 
   const config = loadRuntimeConfig();
+  // Open the DB (runs pending Drizzle migrations) and import any legacy
+  // usage.jsonl into the `usage` table on first boot.
+  getDb();
+  await migrateUsageLog();
+  const memReconcile = reconcileMemories();
+  log("info", "memory_reconciled", memReconcile);
   loadSessions();
   loadRegistry();
   initOrchestrator();
@@ -55,6 +65,7 @@ async function main() {
     stopAgentHealthCheck();
     stopMailPoller();
     stopScheduler();
+    stopTranscriptIndexer();
     // Wait for in-flight scheduled runs to abort cleanly before exiting.
     // Without this, SIGTERM mid-run leaves orphan SDK subprocesses and stale "active" status.
     try {
@@ -89,6 +100,7 @@ async function main() {
   await app.start();
   startHealthHeartbeat({ eventServerPort: config.eventServer.port });
   await startEventServer(config.eventServer.port);
+  startTranscriptIndexer();
 
   const orchChannelId = config.slack.orchestratorChannelId;
   const maxLen = config.slack_formatting.maxMessageLength;

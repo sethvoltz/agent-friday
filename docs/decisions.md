@@ -291,3 +291,37 @@
 **Consequences:**
 - Log file grows unbounded. May need rotation or size-based truncation in the future.
 - Sync writes could theoretically block the event loop on a very slow disk — negligible in practice
+
+---
+
+## ADR-020: SQLite + Drizzle for Opaque Operational Data
+
+**Date:** 2026-04-26
+**Status:** Accepted
+
+**Context:** The dashboard's home page and sessions layout were each scanning `~/.friday/usage.jsonl` 2–4 times per navigation, with no shared parse — by ten messages the file had been parsed dozens of times. The same query pattern (sums, counts, min/max, group-by) repeated across loaders. Memory search (`packages/memory/src/search.ts`) read every `.md` file from disk on every query. Transcript date-range lookups did partial-file reads of `~/.claude/projects/**/<sessionId>.jsonl` per former session in the registry, on every dashboard navigation. All of this was solving aggregation/index problems with file scans.
+
+**Decision:** Adopt SQLite (WAL mode) backed by `better-sqlite3` and the Drizzle ORM. Schema lives in `packages/shared/src/db/schema.ts`; generated migrations live in `packages/shared/drizzle/` and run on first DB open per process. Both daemon and dashboard processes open the same `~/.friday/friday.db`.
+
+The DB stores only **opaque operational data**:
+- `usage` table — replaces `usage.jsonl` (one-shot import, then renamed `.migrated-<date>`)
+- `memories` table + `memories_fts` (FTS5) — derived index over `memory/entries/*.md`; `.md` is still source of truth
+- `transcript_index` table — derived index over `~/.claude/projects/**/*.jsonl`; SDK files untouched
+- `db_meta` — generic key/value (e.g. last reconcile timestamps)
+
+User-editable files (`config.json`, `agents.json`, `*.md`) stay as files. The DB only mirrors them when the original is large enough that scanning hurts; the user-facing copy is always authoritative.
+
+**Rationale:**
+- WAL lets daemon and dashboard hold concurrent connections to the same file without locking ceremony.
+- Drizzle gives us TypeScript-first schemas, generated migrations (no hand-rolled DDL drift), and lightweight queries with no codegen step at runtime. Both the daemon and dashboard import the same query module from `@friday/shared`.
+- Aggregation queries (cost-by-agent, session date ranges, recall search) become indexed lookups instead of full-file scans.
+- Memory FTS5 makes free-text search proportional to result count, not corpus size, while the `.md` file model continues to support hand-editing and `grep`.
+- mtime-based reconciliation with a 60s overlap window keeps the derived indexes fresh without touching `.md` files on every recall (which would create needless file churn).
+- The dashboard's `parent()`-based registry dedup (Phase 2 of this work) and `getIndexedRanges()` (Phase 3b) eliminate the read amplification.
+
+**Consequences:**
+- New native dependency (`better-sqlite3`). Acceptable — the workspace already builds native modules.
+- First-boot migration from `usage.jsonl` is one-shot; the source file is renamed (not deleted) to preserve data.
+- FTS5 virtual tables and triggers aren't modeled by Drizzle and live in `runMigrations()` as raw SQL (idempotent `CREATE … IF NOT EXISTS`).
+- The transcript indexer must skip live sessions (sessionId in the registry) because the SDK is still appending; otherwise it could cache a stale `lastTimestamp`.
+- See `.claude/rules/drizzle-migrations.md` for migration discipline future agents must follow.

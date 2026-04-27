@@ -114,6 +114,17 @@ export function getSessionDateRange(
   if (!dir) return null;
 
   const jsonlPath = join(dir, `${sessionId}.jsonl`);
+  return readJsonlDateRange(jsonlPath);
+}
+
+/**
+ * Like `getSessionDateRange`, but takes the full file path. Used by the
+ * transcript indexer, which already discovered the path via directory walk
+ * and shouldn't have to round-trip a possibly-lossy CWD encoding.
+ */
+export function readJsonlDateRange(
+  jsonlPath: string,
+): { firstAt: string; lastAt: string } | null {
   if (!existsSync(jsonlPath)) return null;
 
   const HEAD_BYTES = 4096;

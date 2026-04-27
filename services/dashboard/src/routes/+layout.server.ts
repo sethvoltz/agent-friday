@@ -1,6 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, CONFIG_PATH, FRIDAY_DIR } from "@friday/shared";
+import {
+  loadConfig,
+  CONFIG_PATH,
+  FRIDAY_DIR,
+  AGENTS_PATH,
+  type AgentRegistry,
+} from "@friday/shared";
 
 const HEALTH_FILE = join(FRIDAY_DIR, "health.json");
 
@@ -36,10 +42,22 @@ export const load = async () => {
     }
   }
 
+  // Agent registry — read once at the root layout so child loads can pull it
+  // via `await parent()` instead of re-reading agents.json on every navigation.
+  let agents: AgentRegistry = {};
+  if (existsSync(AGENTS_PATH)) {
+    try {
+      agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
+    } catch {
+      // Malformed — leave empty.
+    }
+  }
+
   return {
     eventServerUrl: `http://localhost:${eventServerPort}/events`,
     health,
     daemonOnline,
     configExists,
+    agents,
   };
 };

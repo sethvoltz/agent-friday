@@ -6,6 +6,7 @@ import {
   USAGE_LOG_PATH,
   FEEDBACK_LOG_PATH,
   AGENTS_PATH,
+  getAllUsageEntries,
   type AgentRegistry,
 } from "@friday/shared";
 import type { EvidencePointer, Signal, SignalSeverity } from "./store.js";
@@ -273,48 +274,72 @@ export interface UsageScanOptions {
  * meta-agent's own token usage never becomes input to the next meta-run.
  */
 export function scanUsageLog(opts: UsageScanOptions = {}): Signal[] {
-  const path = opts.usageLogPath ?? USAGE_LOG_PATH;
-  if (!existsSync(path)) return [];
-
   const sinceMs = opts.since ? Date.parse(opts.since) : 0;
   const multiplier = opts.spikeMultiplier ?? 4;
-
   const metaSessions = collectMetaSessions(opts.agentsPath);
-  const perAgent = new Map<string, { tokens: number; ts: string; line: number }[]>();
+  const perAgent = new Map<string, { tokens: number; ts: string; pointer: EvidencePointer }[]>();
 
-  const raw = readFileSync(path, "utf-8");
-  const lines = raw.split("\n");
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-
-    let parsed: UsageLine;
-    try {
-      parsed = JSON.parse(line) as UsageLine;
-    } catch {
-      continue;
+  // Two read paths:
+  //   1. Tests pass an explicit usageLogPath at a JSONL file.
+  //   2. Production reads the SQLite `usage` table (after the one-shot
+  //      migration the legacy file is gone).
+  // The detection logic below is identical for both — only the source differs.
+  const explicitPath = opts.usageLogPath;
+  if (explicitPath) {
+    if (!existsSync(explicitPath)) return [];
+    const raw = readFileSync(explicitPath, "utf-8");
+    const lines = raw.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line) continue;
+      let parsed: UsageLine;
+      try {
+        parsed = JSON.parse(line) as UsageLine;
+      } catch {
+        continue;
+      }
+      const ts = parsed.ts;
+      if (!ts) continue;
+      if (sinceMs && Date.parse(ts) < sinceMs) continue;
+      const agent = parsed.agent;
+      if (!agent) continue;
+      if (agent.startsWith(META_AGENT_PREFIX)) continue;
+      if (parsed.sessionId && metaSessions.has(parsed.sessionId)) continue;
+      const tokens =
+        (parsed.inputTokens ?? 0) +
+        (parsed.outputTokens ?? 0) +
+        (parsed.cacheReadTokens ?? 0) +
+        (parsed.cacheCreationTokens ?? 0);
+      if (tokens <= 0) continue;
+      const arr = perAgent.get(agent) ?? [];
+      arr.push({
+        tokens,
+        ts,
+        pointer: { kind: "usage", path: explicitPath, line: i + 1 },
+      });
+      perAgent.set(agent, arr);
     }
-
-    const ts = parsed.ts;
-    if (!ts) continue;
-    if (sinceMs && Date.parse(ts) < sinceMs) continue;
-
-    const agent = parsed.agent;
-    if (!agent) continue;
-    if (agent.startsWith(META_AGENT_PREFIX)) continue;
-    if (parsed.sessionId && metaSessions.has(parsed.sessionId)) continue;
-
-    const tokens =
-      (parsed.inputTokens ?? 0) +
-      (parsed.outputTokens ?? 0) +
-      (parsed.cacheReadTokens ?? 0) +
-      (parsed.cacheCreationTokens ?? 0);
-    if (tokens <= 0) continue;
-
-    const arr = perAgent.get(agent) ?? [];
-    arr.push({ tokens, ts, line: i + 1 });
-    perAgent.set(agent, arr);
+  } else {
+    for (const row of getAllUsageEntries()) {
+      const agent = row.agentName;
+      if (!agent) continue;
+      if (agent.startsWith(META_AGENT_PREFIX)) continue;
+      if (sinceMs && Date.parse(row.timestamp) < sinceMs) continue;
+      if (row.sessionId && metaSessions.has(row.sessionId)) continue;
+      const tokens =
+        (row.inputTokens ?? 0) +
+        (row.outputTokens ?? 0) +
+        (row.cacheReadTokens ?? 0) +
+        (row.cacheCreationTokens ?? 0);
+      if (tokens <= 0) continue;
+      const arr = perAgent.get(agent) ?? [];
+      arr.push({
+        tokens,
+        ts: row.timestamp,
+        pointer: { kind: "usage", path: USAGE_LOG_PATH, line: 0 },
+      });
+      perAgent.set(agent, arr);
+    }
   }
 
   const buckets = new Map<string, Signal>();
@@ -327,13 +352,12 @@ export function scanUsageLog(opts: UsageScanOptions = {}): Signal[] {
     if (spikes.length === 0) continue;
 
     for (const spike of spikes) {
-      bucketAppend(
+      bucketAppendWithPointer(
         buckets,
         "usage_token_spike",
         "usage",
         "medium",
-        path,
-        spike.line,
+        spike.pointer,
         spike.ts,
         agent
       );
@@ -447,6 +471,41 @@ function bucketAppend(
     return;
   }
 
+  buckets.set(hash, {
+    hash,
+    source,
+    key: event,
+    severity,
+    count: 1,
+    firstSeenAt: ts,
+    lastSeenAt: ts,
+    agent,
+    evidencePointers: [pointer],
+  });
+}
+
+/**
+ * Same as bucketAppend but takes a fully-built EvidencePointer. Lets callers
+ * (e.g. the DB-backed usage scan) supply pointers without a line number while
+ * keeping pointer construction in one place.
+ */
+function bucketAppendWithPointer(
+  buckets: Map<string, Signal>,
+  event: string,
+  source: Signal["source"],
+  severity: SignalSeverity,
+  pointer: EvidencePointer,
+  ts: string,
+  agent: string | undefined
+): void {
+  const hash = signalHash(event, agent);
+  const existing = buckets.get(hash);
+  if (existing) {
+    existing.count++;
+    existing.lastSeenAt = ts;
+    if (existing.evidencePointers.length < 3) existing.evidencePointers.push(pointer);
+    return;
+  }
   buckets.set(hash, {
     hash,
     source,

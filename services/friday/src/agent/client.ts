@@ -230,21 +230,24 @@ export async function sendToAgent(
           durationMs,
         });
 
-        // Append to usage log file
-        logUsage({
-          timestamp: new Date().toISOString(),
-          channelId: options.channelId,
-          sessionType: options.sessionType,
-          sessionId,
-          model: options.model,
-          costUsd,
-          inputTokens,
-          outputTokens,
-          cacheCreationTokens,
-          cacheReadTokens,
-          turnNumber,
-          durationMs,
-        });
+        // Persist usage to the SQLite `usage` table
+        logUsage(
+          {
+            timestamp: new Date().toISOString(),
+            channelId: options.channelId,
+            sessionType: options.sessionType,
+            sessionId,
+            model: options.model,
+            costUsd,
+            inputTokens,
+            outputTokens,
+            cacheCreationTokens,
+            cacheReadTokens,
+            turnNumber,
+            durationMs,
+          },
+          options.sessionType === "orchestrator" ? "orchestrator" : null,
+        );
 
         eventBus.publish({ type: "turn:complete", agentName: eventAgentName, sessionId });
       }

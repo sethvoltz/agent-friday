@@ -6,17 +6,23 @@
   "exports": {
     ".": "./dist/index.js",
     "./config": "./dist/config.js",
-    "./usage": "./dist/usage.js"
+    "./usage": "./dist/usage.js",
+    "./db": "./dist/db/index.js"
   },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
-    "cron-parser": "^5.5.0"
+    "better-sqlite3": "^11.7.0",
+    "cron-parser": "^5.5.0",
+    "drizzle-orm": "^0.36.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "drizzle-kit": "^0.30.0",
     "typescript": "^5.7.0"
   }
 }

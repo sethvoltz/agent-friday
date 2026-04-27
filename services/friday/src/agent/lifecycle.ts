@@ -330,7 +330,7 @@ async function runAgentLoop(
               cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
               turnNumber,
               durationMs,
-            });
+            }, agentName);
 
             recordActivity(agentName);
             eventBus.publish({ type: "turn:complete", agentName, sessionId });
