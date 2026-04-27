@@ -41,6 +41,7 @@ import { fetchSlackImages } from "./image-fetch.js";
 import { createMemoryTools } from "../memory/memory-tools.js";
 import { buildMemoryContext } from "../memory/auto-recall.js";
 import { createScheduleTools } from "../scheduler/schedule-tools.js";
+import { createEvolveTools } from "../evolve/evolve-tools.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -483,6 +484,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                   model: config.agent.model,
                   defaultCwd: config.agent.workingDirectory,
                 }),
+                "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
               }
             : {
                 "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),

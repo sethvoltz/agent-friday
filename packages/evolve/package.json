@@ -15,6 +15,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@friday/memory": "workspace:*",
     "@friday/shared": "workspace:*"
   },
   "devDependencies": {

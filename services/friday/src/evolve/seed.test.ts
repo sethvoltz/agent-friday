@@ -31,6 +31,8 @@ describe("seedScheduledMetaAgents", () => {
     expect(name).toBe("scheduled-meta-daily");
     expect(schedule).toEqual({ cron: "0 4 * * *" });
     expect(taskPrompt).toContain("friday-evolve scan");
+    expect(taskPrompt).toContain("mail_send");
+    expect(taskPrompt).toContain("priority=\"urgent\"");
     expect(cwd).toBe("/tmp/wd");
   });
 

@@ -21,6 +21,7 @@ import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
 import { drainScheduledRuns } from "./scheduler/trigger.js";
 import { createScheduleTools } from "./scheduler/schedule-tools.js";
 import { seedScheduledMetaAgents } from "./evolve/seed.js";
+import { createEvolveTools } from "./evolve/evolve-tools.js";
 
 async function main() {
   const startTime = Date.now();
@@ -145,6 +146,7 @@ async function main() {
               model: config.agent.model,
               defaultCwd: config.agent.workingDirectory,
             }),
+            "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
           },
           systemPrompt: buildSystemPrompt(
             config,

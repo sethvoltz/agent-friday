@@ -36,6 +36,9 @@ importers:
 
   packages/evolve:
     dependencies:
+      '@friday/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@friday/shared':
         specifier: workspace:*
         version: link:../shared

@@ -48,6 +48,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/monitor/agent-health.ts` | Periodic agent health checks — detects stalled agents (no turn progress) and crashed agents (loop exited but status active). Notifies orchestrator via mail. |
 | `src/memory/memory-tools.ts` | Memory MCP tools (`memory_search`, `memory_save`, `memory_update`, `memory_get`, `memory_forget`) for Orchestrator and Bare sessions |
 | `src/memory/auto-recall.ts` | Builds a `<memory-context>` block prepended to each Orchestrator/Bare prompt — runs hybrid keyword search and embeds top-N entries verbatim so the agent never has to call `memory_search` first |
+| `src/evolve/seed.ts` | Boot-time idempotent seed of the `scheduled-meta-daily` agent (cron `0 4 * * *`) that runs the evolve pipeline and escalates criticals to the orchestrator |
+| `src/evolve/evolve-tools.ts` | Evolve MCP tools (`evolve_list`, `evolve_show`, `evolve_approve`, `evolve_reject`, `evolve_summarize_critical`) for the orchestrator |
 | `src/slack/preflight.ts` | Boot-time Slack cleanup — patches interrupted messages and removes dangling emoji reactions from previous crashes |
 | `src/slack/image-fetch.ts` | Authenticated download of Slack private image files; returns base64-encoded `ImageAttachment[]` |
 | `src/comms/mail.ts` | Beads-backed inter-agent mail system with push delivery via EventEmitter. Uses `execFileSync` (not shell) to avoid injection. |
@@ -74,6 +76,20 @@ Persistent knowledge store for Orchestrator and Bare sessions. Memories are file
 - `store.ts` — CRUD operations: `saveEntry`, `getEntry`, `updateEntry`, `forgetEntry`, `listEntries`, `touchRecall`. Markdown serialization with frontmatter.
 - `search.ts` — Hybrid keyword search with recall frequency boosting (`log2(recallCount + 1)`). Tag filtering (AND logic). Score: title match (3pts), content match (1pt), tag exact match (5pts).
 - `events.ts` — JSONL event logging at `~/.friday/memory/events.jsonl` for audit trail.
+
+### Evolve Package (`packages/evolve`)
+
+Self-improvement pipeline. Scans Friday's own logs for recurring pain (crashes, loop errors, scheduled-run failures), buckets by stable hash, and writes ranked proposals to `~/.friday/evolve/proposals/` for the user to approve, reject, or apply.
+
+- `store.ts` — `Proposal` CRUD with markdown frontmatter; `Signal` payload serialized as inline JSON. Status lifecycle: `open → critical → approved → applied` (or `→ rejected`).
+- `scan.ts` — Deterministic scanner over `~/.friday/daemon.jsonl`. Self-excludes events from `scheduled-meta-*` agents to prevent feedback loops.
+- `rank.ts` — Pure scoring: severity floor + log2 frequency + distinct-signal boost − blast-radius penalty. `isCritical()` requires score ≥ 80 AND (high severity OR count ≥ 5).
+- `propose.ts` — Merges new occurrences into existing open proposals by signal hash; creates fresh ones for new hashes. `rerankAll()` recomputes scores at end of run.
+- `apply.ts` — `applyProposal()` materializes `memory`-type proposals via `@friday/memory.saveEntry`. Other types (prompt/config/code) are accepted but materialization lands in later phases.
+- `runs.ts` — Per-run audit log at `~/.friday/evolve/runs.jsonl`.
+- `cli.ts` — `friday-evolve scan|list|show` invoked by the daily meta-agent.
+
+The `scheduled-meta-daily` agent (seeded at boot, cron `0 4 * * *`) runs the CLI and mails the orchestrator urgently if any proposals are critical. The orchestrator surfaces them via `friday-evolve` MCP tools.
 
 ### Dashboard (`services/dashboard`)
 
@@ -295,6 +311,7 @@ Agents interact with the system via MCP tool servers injected into their session
 | `friday-mail` | `mail_send`, `mail_check`, `mail_read`, `mail_close` | All agent types |
 | `friday-scheduler` | `schedule_create`, `schedule_list`, `schedule_show`, `schedule_preview`, `schedule_pause`, `schedule_resume`, `schedule_update`, `schedule_revert`, `schedule_delete`, `schedule_trigger` | Orchestrator |
 | `friday-memory` | `memory_search`, `memory_save`, `memory_update`, `memory_get`, `memory_forget` | Orchestrator, Bare sessions (auto-recall context block injected before every turn) |
+| `friday-evolve` | `evolve_list`, `evolve_show`, `evolve_approve`, `evolve_reject`, `evolve_summarize_critical` | Orchestrator |
 
 ### Workspaces
 
@@ -307,6 +324,7 @@ agent-friday/
 ├── packages/shared      — Shared types (config, usage, transcript parser)
 ├── packages/cli         — CLI entrypoint (@friday/cli)
 ├── packages/memory      — Memory system (file-based store, search, events)
+├── packages/evolve      — Self-improvement pipeline (scan → propose → rank → apply)
 ├── services/friday      — Bridge daemon
 ├── services/dashboard   — Management GUI (SvelteKit)
 ├── bin/friday           — Dev shim (runs @friday/cli via tsx)
