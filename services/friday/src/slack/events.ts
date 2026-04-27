@@ -42,6 +42,7 @@ import { createMemoryTools } from "../memory/memory-tools.js";
 import { buildMemoryContext } from "../memory/auto-recall.js";
 import { createScheduleTools } from "../scheduler/schedule-tools.js";
 import { createEvolveTools } from "../evolve/evolve-tools.js";
+import { logFeedback } from "./feedback.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -283,8 +284,19 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       const messageTs = changed.message?.ts;
       const newText = changed.message?.text;
 
-      if (messageTs && newText && updateQueued(channelId, messageTs, newText)) {
-        log("info", "queued_message_edited", { channelId, messageTs });
+      if (messageTs && newText) {
+        const previousText = changed.previous_message?.text;
+        if (updateQueued(channelId, messageTs, newText)) {
+          log("info", "queued_message_edited", { channelId, messageTs });
+        }
+        // Always log feedback — edits to already-processed messages are signal too.
+        logFeedback({
+          kind: "edited",
+          channelId,
+          messageTs,
+          previousText,
+          newText,
+        });
       }
     }
 
@@ -292,19 +304,28 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       const deleted = event as any;
       const channelId = deleted.channel;
       const messageTs = deleted.previous_message?.ts;
+      const previousText = deleted.previous_message?.text;
 
-      if (messageTs && removeQueued(channelId, messageTs)) {
-        // Remove the queued emoji from the deleted message
-        try {
-          await client.reactions.remove({
-            channel: channelId,
-            timestamp: messageTs,
-            name: emojis.queued,
-          });
-        } catch {
-          // Message already deleted, reaction gone
+      if (messageTs) {
+        if (removeQueued(channelId, messageTs)) {
+          // Remove the queued emoji from the deleted message
+          try {
+            await client.reactions.remove({
+              channel: channelId,
+              timestamp: messageTs,
+              name: emojis.queued,
+            });
+          } catch {
+            // Message already deleted, reaction gone
+          }
+          log("info", "queued_message_deleted", { channelId, messageTs });
         }
-        log("info", "queued_message_deleted", { channelId, messageTs });
+        logFeedback({
+          kind: "deleted",
+          channelId,
+          messageTs,
+          previousText,
+        });
       }
     }
   });

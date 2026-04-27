@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scanDaemonLog, signalHash } from "./scan.js";
+import {
+  scanDaemonLog,
+  scanFeedback,
+  scanUsageLog,
+  scanTranscripts,
+  signalHash,
+} from "./scan.js";
 
 let workDir: string;
 let logPath: string;
@@ -113,5 +119,210 @@ describe("scanDaemonLog", () => {
     const [signal] = scanDaemonLog({ daemonLogPath: logPath });
     expect(signal.count).toBe(10);
     expect(signal.evidencePointers).toHaveLength(3);
+  });
+});
+
+describe("scanFeedback", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "friday-evolve-feedback-"));
+    path = join(dir, "feedback.jsonl");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns nothing when the log is missing", () => {
+    expect(scanFeedback({ feedbackLogPath: join(dir, "missing.jsonl") })).toEqual([]);
+  });
+
+  it("buckets edited and deleted into separate signals", () => {
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ ts: "2026-04-26T00:00:00.000Z", kind: "edited", channelId: "C1", messageTs: "1" }),
+        JSON.stringify({ ts: "2026-04-26T00:00:01.000Z", kind: "deleted", channelId: "C1", messageTs: "2" }),
+        JSON.stringify({ ts: "2026-04-26T00:00:02.000Z", kind: "edited", channelId: "C1", messageTs: "3" }),
+      ].join("\n") + "\n"
+    );
+
+    const signals = scanFeedback({ feedbackLogPath: path });
+    expect(signals.map((s) => s.key).sort()).toEqual([
+      "slack_deleted_processed",
+      "slack_edited_processed",
+    ]);
+    const edited = signals.find((s) => s.key === "slack_edited_processed")!;
+    expect(edited.count).toBe(2);
+  });
+
+  it("emits slack_retry_burst when the same message is edited 3+ times", () => {
+    writeFileSync(
+      path,
+      Array.from({ length: 4 }, (_, i) =>
+        JSON.stringify({
+          ts: `2026-04-26T00:00:${String(i).padStart(2, "0")}.000Z`,
+          kind: "edited",
+          channelId: "C1",
+          messageTs: "same-message",
+        })
+      ).join("\n") + "\n"
+    );
+
+    const signals = scanFeedback({ feedbackLogPath: path });
+    const burst = signals.find((s) => s.key === "slack_retry_burst");
+    expect(burst).toBeDefined();
+    expect(burst!.severity).toBe("medium");
+  });
+
+  it("excludes feedback whose agent is the meta-agent", () => {
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ ts: "2026-04-26T00:00:00.000Z", kind: "edited", channelId: "C1", messageTs: "1", agent: "scheduled-meta-daily" }),
+        JSON.stringify({ ts: "2026-04-26T00:00:01.000Z", kind: "edited", channelId: "C1", messageTs: "2", agent: "builder-foo" }),
+      ].join("\n") + "\n"
+    );
+
+    const signals = scanFeedback({ feedbackLogPath: path });
+    expect(signals).toHaveLength(1);
+    expect(signals[0].agent).toBe("builder-foo");
+  });
+});
+
+describe("scanUsageLog", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "friday-evolve-usage-"));
+    path = join(dir, "usage.jsonl");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns nothing when log is missing", () => {
+    expect(scanUsageLog({ usageLogPath: join(dir, "missing.jsonl") })).toEqual([]);
+  });
+
+  it("flags a turn that exceeds the spike multiplier", () => {
+    const baseline = Array.from({ length: 5 }, (_, i) => ({
+      ts: `2026-04-26T00:00:${String(i).padStart(2, "0")}.000Z`,
+      agent: "builder-foo",
+      sessionId: "s1",
+      inputTokens: 1000,
+      outputTokens: 100,
+    }));
+    const spike = {
+      ts: "2026-04-26T00:00:10.000Z",
+      agent: "builder-foo",
+      sessionId: "s1",
+      inputTokens: 50000,
+      outputTokens: 5000,
+    };
+    writeFileSync(path, [...baseline, spike].map((o) => JSON.stringify(o)).join("\n") + "\n");
+
+    const signals = scanUsageLog({ usageLogPath: path, spikeMultiplier: 4 });
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe("usage_token_spike");
+    expect(signals[0].agent).toBe("builder-foo");
+    expect(signals[0].severity).toBe("medium");
+  });
+
+  it("does not flag when there are too few baseline turns", () => {
+    writeFileSync(
+      path,
+      [
+        JSON.stringify({ ts: "2026-04-26T00:00:00.000Z", agent: "x", inputTokens: 1000 }),
+        JSON.stringify({ ts: "2026-04-26T00:00:01.000Z", agent: "x", inputTokens: 100000 }),
+      ].join("\n") + "\n"
+    );
+
+    expect(scanUsageLog({ usageLogPath: path })).toEqual([]);
+  });
+
+  it("excludes meta-agent sessions by name prefix", () => {
+    const baseline = Array.from({ length: 5 }, (_, i) => ({
+      ts: `2026-04-26T00:00:${String(i).padStart(2, "0")}.000Z`,
+      agent: "scheduled-meta-daily",
+      inputTokens: 1000,
+    }));
+    const spike = {
+      ts: "2026-04-26T00:00:10.000Z",
+      agent: "scheduled-meta-daily",
+      inputTokens: 999999,
+    };
+    writeFileSync(path, [...baseline, spike].map((o) => JSON.stringify(o)).join("\n") + "\n");
+
+    expect(scanUsageLog({ usageLogPath: path })).toEqual([]);
+  });
+});
+
+describe("scanTranscripts", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "friday-evolve-tx-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns nothing when projects root is missing", () => {
+    expect(scanTranscripts({ projectsRoot: join(dir, "missing") })).toEqual([]);
+  });
+
+  it("detects a retry from two near-duplicate user messages within window", () => {
+    const project = join(dir, "proj-a");
+    mkdirSync(project, { recursive: true });
+    const file = join(project, "session-abc.jsonl");
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-04-26T00:00:00.000Z",
+          message: { role: "user", content: "please summarize the recent build failures" },
+        }),
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-04-26T00:01:00.000Z",
+          message: { role: "user", content: "please summarize recent build failures again" },
+        }),
+      ].join("\n") + "\n"
+    );
+
+    const signals = scanTranscripts({ projectsRoot: dir });
+    expect(signals).toHaveLength(1);
+    expect(signals[0].key).toBe("transcript_user_retry");
+    expect(signals[0].evidencePointers[0].sessionId).toBe("session-abc");
+  });
+
+  it("does not flag dissimilar consecutive messages", () => {
+    const project = join(dir, "proj-a");
+    mkdirSync(project, { recursive: true });
+    const file = join(project, "session-xyz.jsonl");
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-04-26T00:00:00.000Z",
+          message: { role: "user", content: "build status please" },
+        }),
+        JSON.stringify({
+          type: "user",
+          timestamp: "2026-04-26T00:01:00.000Z",
+          message: { role: "user", content: "what time is the meeting tomorrow" },
+        }),
+      ].join("\n") + "\n"
+    );
+
+    expect(scanTranscripts({ projectsRoot: dir })).toEqual([]);
   });
 });

@@ -23,10 +23,29 @@ export {
 
 export {
   type ScanOptions,
+  type FeedbackScanOptions,
+  type UsageScanOptions,
   scanDaemonLog,
+  scanFeedback,
+  scanUsageLog,
+  scanTranscripts,
   signalHash,
   sinceHoursAgo,
 } from "./scan.js";
+
+export {
+  type Cluster,
+  type MergeOptions,
+  type MergeResult,
+  CLUSTERS_DIR,
+  ensureClustersDir,
+  listClusters,
+  getCluster,
+  saveCluster,
+  parseCluster,
+  serializeCluster,
+  mergeClusters,
+} from "./clusters.js";
 
 export {
   type CriticalityRule,
