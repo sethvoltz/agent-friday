@@ -46,3 +46,10 @@ export {
   RUNS_LOG_PATH,
   appendRun,
 } from "./runs.js";
+
+export {
+  type ApplyOutcome,
+  type ApplyOptions,
+  applyProposal,
+  rejectProposal,
+} from "./apply.js";
