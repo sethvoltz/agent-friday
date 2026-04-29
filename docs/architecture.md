@@ -80,25 +80,32 @@ Persistent knowledge store for Orchestrator and Bare sessions. Memories are file
 
 ### Evolve Package (`packages/evolve`)
 
-Self-improvement pipeline. Scans Friday's own logs for recurring pain (crashes, loop errors, scheduled-run failures), buckets by stable hash, and writes ranked proposals to `~/.friday/evolve/proposals/` for the user to approve, reject, or apply.
+Self-improvement pipeline ("Evolve with Intent"). Scans Friday's own telemetry for recurring pain *and* for trust-erosion patterns in the human-orchestrator dialog, buckets by stable hash, and writes ranked proposals to `~/.friday/evolve/proposals/` for the user to approve, reject, or apply.
 
-- `store.ts` — `Proposal` CRUD with markdown frontmatter; `Signal` payload serialized as inline JSON. Status lifecycle: `open → critical → approved → applied` (or `→ rejected`).
+A two-tier LLM split runs alongside the deterministic scanners:
+- **Haiku, breadth.** Friction scoring of every orchestrator user-turn during scan. Cheap per call, runs over hundreds of turns per scan window.
+- **Sonnet, depth.** Per-proposal enrichment: rewrites the templated body with root-cause analysis and a concrete suggested change, anchored in evidence-pointer snippets.
+
+- `store.ts` — `Proposal` CRUD with markdown frontmatter; `Signal` payload serialized as inline JSON. Status lifecycle: `open → critical → approved → applied` (or `→ rejected`). Frontmatter includes `enrichedAt` / `enrichedBy` so daily passes are idempotent.
 - `scan.ts` — Deterministic scanners over four sources, all self-excluding `scheduled-meta-*` activity to prevent feedback loops:
   - `scanDaemonLog()` — daemon events (crashes, loop errors, scheduled-run failures).
   - `scanFeedback()` — `~/.friday/evolve/feedback.jsonl` (Slack edit/delete + 3+ edits to the same message → `slack_retry_burst`).
   - `scanUsageLog()` — per-agent token-spike detection (single turn ≥ 4× the agent's median).
   - `scanTranscripts()` — consecutive user messages within 5 min with cosine token-overlap ≥ 0.6 (retry detection).
+- `scan-friction.ts` — Haiku-graded friction pass over orchestrator transcripts (current + former session ids only). Strips `<memory-context>` blocks, skips tool-result-only turns, batches 30 turns per call. Categories: `correction|confusion|repeat|reset|frustration|doubt|redirect|none`. Severity tiering: 4-5 → high, 3 → medium, 2 → low; below 2 dropped. Emits one signal per category with up to 3 highest-friction evidence pointers. Failure-isolated in the CLI: a transient API error returns `[]` instead of sinking the rest of the scan.
+- `llm.ts` — Thin wrapper around `query()` from `@anthropic-ai/claude-agent-sdk` (`allowedTools: []`, no MCP, `bypassPermissions`). Used by both the friction scanner and the enrichment pass — keeps Pro/Max billing (ADR-003).
 - `rank.ts` — Pure scoring: severity floor + log2 frequency + distinct-signal boost − blast-radius penalty. `isCritical()` requires score ≥ 80 AND (high severity OR count ≥ 5).
-- `propose.ts` — Merges new occurrences into existing open proposals by signal hash; creates fresh ones for new hashes. `rerankAll()` recomputes scores at end of run.
+- `propose.ts` — Merges new occurrences into existing open proposals by signal hash; creates fresh ones for new hashes. `rerankAll()` recomputes scores at end of run. Templated body points the reader at `friday-evolve enrich`.
+- `enrich.ts` — Sonnet rewrite of templated proposal bodies. Hydrates evidence pointers with ±2 lines of context, asks Sonnet for `{body, type, blastRadius}` with sections **Signal summary** | **Root cause** | **Suggested change**. Idempotent: skips when `enrichedAt >= updatedAt` unless `--force`. Friction signals are flagged in the system prompt as first-class trust-erosion indicators.
 - `clusters.ts` — `mergeClusters()` runs Jaccard overlap (≥ 0.5 default) on signal-hash sets across open proposals; uses union-find to collapse groups; writes one cluster file per component to `~/.friday/evolve/clusters/<id>.md` and stamps `clusterId` on members. Non-destructive: proposal ids are preserved.
 - `apply.ts` — `applyProposal()` materializes `memory` proposals via `@friday/memory.saveEntry`, writes `prompt` proposals to `config.json` `agent.systemPrompt`, and deep-merges `config` proposals (JSON body) into `config.json`. A self-modification guard refuses prompt/config changes targeting any `scheduled-meta-*` agent. `code` proposals are dispatched to the orchestrator via `dispatch.ts`.
 - `dispatch.ts` — `dispatchCodeProposal()` shells out to `bd` to (1) seed a Beads epic with the proposal body, targets, evidence pointers, and acceptance criteria, then (2) mail the orchestrator (`type:message,delivery:pending,from:evolve:<applier>`) with the epic id. Builder creation stays gated on the orchestrator's existing user-approval flow — evolve never spawns a Builder itself.
 - `runs.ts` — Per-run audit log at `~/.friday/evolve/runs.jsonl`.
-- `cli.ts` — `friday-evolve scan|cluster|list|show` invoked by the meta-agents.
+- `cli.ts` — `friday-evolve scan|enrich|cluster|list|show` invoked by the meta-agents.
 
 Two meta-agents are seeded idempotently at daemon boot:
-- `scheduled-meta-daily` (cron `0 4 * * *`) — 24h scan over all four sources; mails the orchestrator urgently when criticals exist.
-- `scheduled-meta-weekly` (cron `0 5 * * 0`) — 7-day scan + Jaccard re-cluster; surfaces slow-burn patterns the daily run misses.
+- `scheduled-meta-daily` (cron `0 4 * * *`) — 24h scan (incl. friction) → enrich → list; mails the orchestrator urgently when criticals exist.
+- `scheduled-meta-weekly` (cron `0 5 * * 0`) — 7-day scan → enrich → Jaccard re-cluster; surfaces slow-burn patterns the daily run misses.
 
 The orchestrator surfaces proposals via `friday-evolve` MCP tools.
 

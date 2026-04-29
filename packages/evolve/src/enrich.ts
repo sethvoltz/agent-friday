@@ -1,0 +1,281 @@
+import { existsSync, readFileSync } from "node:fs";
+import {
+  getProposal,
+  listProposals,
+  updateProposal,
+  type Proposal,
+  type ProposalType,
+  type Signal,
+  type EvidencePointer,
+} from "./store.js";
+import { chat, extractJson } from "./llm.js";
+
+export interface EnrichOptions {
+  /** Enrich only this proposal id. Mutually exclusive with `all`. */
+  id?: string;
+  /** Enrich every open/critical proposal that needs it. */
+  all?: boolean;
+  /** Re-enrich even if `enrichedAt` is fresh. */
+  force?: boolean;
+  /** Sonnet model id. Default current Sonnet 4.6. */
+  model?: string;
+  /** Maximum proposals enriched per run. Default 50. */
+  limit?: number;
+  /** Per-evidence content slice cap, in chars. Default 2000. */
+  evidenceCharCap?: number;
+  /** Inject test double. */
+  enrichFn?: EnrichFn;
+}
+
+export interface EnrichResult {
+  enriched: Proposal[];
+  skipped: Array<{ id: string; reason: string }>;
+  failed: Array<{ id: string; error: string }>;
+}
+
+export interface EnrichedProposal {
+  body: string;
+  type: ProposalType;
+  blastRadius: Proposal["blastRadius"];
+}
+
+export type EnrichFn = (
+  proposal: Proposal,
+  context: EnrichContext,
+  model: string
+) => Promise<EnrichedProposal>;
+
+export interface EnrichContext {
+  proposal: Proposal;
+  /** Hydrated evidence: actual content slices keyed by signal hash + pointer index. */
+  evidence: HydratedEvidence[];
+}
+
+export interface HydratedEvidence {
+  signalHash: string;
+  signalKey: string;
+  pointer: EvidencePointer;
+  /** Raw content snippet read from the pointer. Empty if unreadable. */
+  snippet: string;
+}
+
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_LIMIT = 50;
+const DEFAULT_EVIDENCE_CAP = 2000;
+
+/**
+ * Replace templated proposal bodies with Sonnet-generated root-cause analysis
+ * and a concrete suggested change. Idempotent: skips proposals where
+ * `enrichedAt >= updatedAt` unless `--force`.
+ */
+export async function enrichProposals(opts: EnrichOptions = {}): Promise<EnrichResult> {
+  const result: EnrichResult = { enriched: [], skipped: [], failed: [] };
+  const model = opts.model ?? DEFAULT_MODEL;
+  const limit = opts.limit ?? DEFAULT_LIMIT;
+  const evidenceCap = opts.evidenceCharCap ?? DEFAULT_EVIDENCE_CAP;
+  const enrich = opts.enrichFn ?? defaultEnrichFn;
+
+  const targets = selectTargets(opts);
+  let processed = 0;
+
+  for (const proposal of targets) {
+    if (processed >= limit) {
+      result.skipped.push({ id: proposal.id, reason: "limit reached" });
+      continue;
+    }
+    if (!opts.force && !needsEnrichment(proposal)) {
+      result.skipped.push({ id: proposal.id, reason: "already enriched" });
+      continue;
+    }
+
+    const context: EnrichContext = {
+      proposal,
+      evidence: hydrateEvidence(proposal.signals, evidenceCap),
+    };
+
+    let enriched: EnrichedProposal;
+    try {
+      enriched = await enrich(proposal, context, model);
+    } catch (err) {
+      result.failed.push({
+        id: proposal.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+
+    const updated = updateProposal(proposal.id, {
+      proposedChange: enriched.body,
+      type: enriched.type,
+      blastRadius: enriched.blastRadius,
+      enrichedAt: new Date().toISOString(),
+      enrichedBy: model,
+    });
+    if (updated) {
+      result.enriched.push(updated);
+      processed++;
+    } else {
+      result.failed.push({ id: proposal.id, error: "update returned null" });
+    }
+  }
+
+  return result;
+}
+
+function selectTargets(opts: EnrichOptions): Proposal[] {
+  if (opts.id) {
+    const p = getProposal(opts.id);
+    return p ? [p] : [];
+  }
+  if (opts.all) {
+    return listProposals().filter((p) => p.status === "open" || p.status === "critical");
+  }
+  // Default: same as --all when no id given.
+  return listProposals().filter((p) => p.status === "open" || p.status === "critical");
+}
+
+function needsEnrichment(p: Proposal): boolean {
+  if (!p.enrichedAt) return true;
+  // If signals updated after the last enrichment, content is stale.
+  return p.updatedAt > p.enrichedAt;
+}
+
+/**
+ * For each evidence pointer, read a small slice of context around the
+ * referenced line. Best-effort: missing files / unreadable content yield an
+ * empty snippet rather than throwing.
+ */
+export function hydrateEvidence(signals: Signal[], evidenceCharCap: number): HydratedEvidence[] {
+  const out: HydratedEvidence[] = [];
+  for (const signal of signals) {
+    for (const pointer of signal.evidencePointers) {
+      out.push({
+        signalHash: signal.hash,
+        signalKey: signal.key,
+        pointer,
+        snippet: readSnippet(pointer, evidenceCharCap),
+      });
+    }
+  }
+  return out;
+}
+
+function readSnippet(pointer: EvidencePointer, cap: number): string {
+  if (!pointer.path || !existsSync(pointer.path)) return "";
+  try {
+    const raw = readFileSync(pointer.path, "utf-8");
+    if (typeof pointer.line !== "number" || pointer.line <= 0) {
+      return raw.slice(0, cap);
+    }
+    const lines = raw.split("\n");
+    const target = Math.min(Math.max(pointer.line - 1, 0), lines.length - 1);
+    // ±2 lines of context so the LLM can see surrounding turns.
+    const start = Math.max(0, target - 2);
+    const end = Math.min(lines.length, target + 3);
+    const slice = lines.slice(start, end).join("\n");
+    return slice.length > cap ? slice.slice(0, cap) + "…" : slice;
+  } catch {
+    return "";
+  }
+}
+
+const SYSTEM_PROMPT = [
+  "You are Friday's improvement analyst. You rewrite a templated proposal body",
+  "with root-cause analysis and a concrete suggested change. The proposal was",
+  "generated from one or more signals (events, transcripts, usage spikes,",
+  "feedback edits, or human-orchestrator friction).",
+  "",
+  "Your job is to make the proposal actionable. The reader is the orchestrator",
+  "agent or the human who reviews proposals. Write tightly. No fluff.",
+  "",
+  "Output a JSON object with these fields:",
+  '  "body": markdown body. ~150–400 words. Sections: **Signal summary** (1–2 lines)',
+  "         | **Root cause** (your hypothesis, anchored in the evidence)",
+  "         | **Suggested change** (concrete, scoped to one of: memory entry,",
+  "         system prompt edit, config change, or code change). Reference",
+  "         specific files, agent names, or settings when possible.",
+  '  "type": one of "memory" | "prompt" | "config" | "code". Pick the surface',
+  "         the suggested change actually touches. Default to memory only if",
+  "         the action is a lesson the orchestrator should remember.",
+  '  "blastRadius": "low" | "medium" | "high". low = memory or prompt edit.',
+  "         medium = config or scoped code change. high = broad code change.",
+  "",
+  "Friction signals (`friction_*`) deserve extra care: they reflect erosion of",
+  "trust between the user and the orchestrator. Treat these as first-class.",
+  "Suggested change is often a system-prompt or memory edit that prevents the",
+  "next instance.",
+  "",
+  "Respond with just the JSON object. No prose, no fences.",
+].join("\n");
+
+const defaultEnrichFn: EnrichFn = async (proposal, context, model) => {
+  const userPrompt = buildUserPrompt(proposal, context);
+  const reply = await chat({
+    prompt: userPrompt,
+    systemPrompt: SYSTEM_PROMPT,
+    model,
+    timeoutMs: 90_000,
+  });
+
+  const parsed = extractJson<{ body?: string; type?: string; blastRadius?: string }>(reply.text);
+  const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+  if (!body) {
+    throw new Error("enrichment reply missing 'body'");
+  }
+  const type = sanitizeType(parsed.type) ?? proposal.type;
+  const blastRadius = sanitizeBlastRadius(parsed.blastRadius) ?? proposal.blastRadius;
+  return { body, type, blastRadius };
+};
+
+function sanitizeType(raw: unknown): ProposalType | null {
+  if (raw === "memory" || raw === "prompt" || raw === "config" || raw === "code") return raw;
+  return null;
+}
+
+function sanitizeBlastRadius(raw: unknown): Proposal["blastRadius"] | null {
+  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  return null;
+}
+
+function buildUserPrompt(proposal: Proposal, context: EnrichContext): string {
+  const lines: string[] = [];
+  lines.push(`# Proposal to enrich`);
+  lines.push("");
+  lines.push(`**Title**: ${proposal.title}`);
+  lines.push(`**Current type**: ${proposal.type}`);
+  lines.push(`**Current blastRadius**: ${proposal.blastRadius}`);
+  lines.push(`**Score**: ${proposal.score}`);
+  lines.push("");
+  lines.push("## Signals");
+  for (const s of proposal.signals) {
+    lines.push(
+      `- key=\`${s.key}\` source=${s.source} severity=${s.severity} count=${s.count}` +
+        (s.agent ? ` agent=${s.agent}` : "")
+    );
+    lines.push(`  window: ${s.firstSeenAt} → ${s.lastSeenAt}`);
+  }
+  lines.push("");
+  lines.push("## Evidence (snippets read from the pointers)");
+  if (context.evidence.length === 0) {
+    lines.push("_No evidence pointers were readable._");
+  } else {
+    for (const e of context.evidence) {
+      const loc = e.pointer.line ? `${e.pointer.path}:${e.pointer.line}` : e.pointer.path;
+      lines.push(`### \`${e.signalKey}\` — ${loc}`);
+      if (e.pointer.sessionId) lines.push(`session: ${e.pointer.sessionId}`);
+      lines.push("```");
+      lines.push(e.snippet || "(no readable content)");
+      lines.push("```");
+    }
+  }
+  lines.push("");
+  lines.push("## Current body (templated; replace this)");
+  lines.push("```");
+  lines.push(proposal.proposedChange);
+  lines.push("```");
+  lines.push("");
+  lines.push(
+    "Now produce the enrichment as the JSON object specified in the system prompt."
+  );
+  return lines.join("\n");
+}
