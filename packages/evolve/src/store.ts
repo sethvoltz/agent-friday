@@ -214,6 +214,8 @@ export interface UpdateProposalInput {
   appliedBy?: string | null;
   enrichedAt?: string | null;
   enrichedBy?: string | null;
+  /** Override the auto-assigned `updatedAt`. Pass when a write needs `enrichedAt` and `updatedAt` to share a timestamp so idempotency checks survive sub-millisecond races. */
+  updatedAt?: string;
 }
 
 export function updateProposal(id: string, updates: UpdateProposalInput): Proposal | null {
@@ -223,7 +225,7 @@ export function updateProposal(id: string, updates: UpdateProposalInput): Propos
   const next: Proposal = {
     ...existing,
     ...updates,
-    updatedAt: new Date().toISOString(),
+    updatedAt: updates.updatedAt ?? new Date().toISOString(),
   };
 
   writeFileSync(filePath(id), serializeProposal(next));
