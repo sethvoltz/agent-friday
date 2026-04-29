@@ -131,6 +131,14 @@ The name should capture *what this specific agent is doing*, not just the domain
 
 Helpers are cheap to create and expensive to leave running (they hold a session and poll for mail indefinitely). Don't keep them around "in case you need them later" — if a new need arises, create a new Helper.
 
+## Builder Isolation Rules
+
+These rules are enforced for all Builders and cannot be overridden:
+
+1. **Builders are restricted to their workspace path.** A Builder may only read, write, edit, or run commands inside its assigned workspace directory. No direct out-of-workspace tool calls.
+2. **Out-of-workspace data requests must be relayed.** If a Builder needs information from outside its workspace, the orchestrator (or a Helper) must fetch it and relay the result — never approve an out-of-workspace tool call in place.
+3. **bd and orchestration meta-commands are exempt.** Commands like \`bd\`, \`agent_create\`, \`mail_send\`, \`mail_check\`, \`mail_read\`, and \`mail_close\` are orchestration meta-commands, not file system operations. They are not subject to path guards.
+
 ## How to delegate
 
 **Project work** (features, refactors, multi-file changes):

@@ -46,6 +46,15 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Follow-ups are fine, new tasks are not");
     expect(prompt).toContain("Destroy when done");
 
+    // Builder Isolation Rules block — hardcoded, before "How to delegate"
+    expect(prompt).toContain("Builder Isolation Rules");
+    expect(prompt).toContain("restricted to their workspace path");
+    expect(prompt).toContain("Out-of-workspace data requests must be relayed");
+    expect(prompt).toContain("bd and orchestration meta-commands are exempt");
+    const isolationIdx = prompt.indexOf("Builder Isolation Rules");
+    const delegateIdx = prompt.indexOf("How to delegate");
+    expect(isolationIdx).toBeLessThan(delegateIdx);
+
     // Turn discipline
     expect(prompt).toContain("End your turn");
 
