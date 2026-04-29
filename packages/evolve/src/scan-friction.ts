@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS_PATH, type AgentRegistry } from "@friday/shared";
+import { AGENTS_PATH, SESSIONS_DIR, type AgentRegistry } from "@friday/shared";
 import type { EvidencePointer, Signal, SignalSeverity } from "./store.js";
 import { signalHash } from "./scan.js";
 import { chat, extractJson } from "./llm.js";
@@ -22,6 +22,8 @@ export interface FrictionScanOptions {
   since?: string;
   /** Override agents.json path (tests). */
   agentsPath?: string;
+  /** Override the sessions dir (tests). Defaults to SESSIONS_DIR (~/.friday/sessions). */
+  sessionsDir?: string;
   /** Maximum user turns to evaluate per scan. Cap defends against runaway cost. Default 1000. */
   maxTurns?: number;
   /** Turns per LLM batch. Default 30. */
@@ -76,7 +78,7 @@ export async function scanFriction(opts: FrictionScanOptions = {}): Promise<Sign
   const model = opts.model ?? "claude-haiku-4-5-20251001";
   const score = opts.scoreFn ?? defaultScoreFn;
 
-  const orchestratorSessions = collectOrchestratorSessions(opts.agentsPath);
+  const orchestratorSessions = collectOrchestratorSessions(opts.agentsPath, opts.sessionsDir);
   if (orchestratorSessions.size === 0) return [];
 
   const turns = collectOrchestratorTurns(projectsRoot, orchestratorSessions, sinceMs, maxTurns);
@@ -93,9 +95,15 @@ export async function scanFriction(opts: FrictionScanOptions = {}): Promise<Sign
     let results: ScoredTurn[];
     try {
       results = await score(payload, model);
-    } catch {
-      // Swallow — better to score fewer turns than to abort the scan and
-      // lose every other scanner's output. The next run will retry.
+    } catch (err) {
+      // Better to score fewer turns than to abort the scan and lose every
+      // other scanner's output, but log loudly — silent drops here mean
+      // missed friction signals.
+      console.error(
+        `friction scoring batch ${i}-${i + batch.length - 1} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
       continue;
     }
     const byId = new Map(results.map((r) => [r.turn_id, r]));
@@ -292,20 +300,64 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "…";
 }
 
-function collectOrchestratorSessions(agentsPath: string = AGENTS_PATH): Set<string> {
+/**
+ * Live orchestrator session ids live in `~/.friday/sessions/channels.json`
+ * (per-channel) and historical ones in `channel-history.json` — NOT in
+ * `agents.json.orchestrator.sessionId`, which stays null for the channel-
+ * orchestrator architecture. We union all three sources so the scanner sees
+ * every transcript the user has actually had a conversation in.
+ */
+function collectOrchestratorSessions(
+  agentsPath: string = AGENTS_PATH,
+  sessionsDir: string = SESSIONS_DIR
+): Set<string> {
   const out = new Set<string>();
-  if (!existsSync(agentsPath)) return out;
-  try {
-    const registry = JSON.parse(readFileSync(agentsPath, "utf-8")) as AgentRegistry;
-    const orch = registry["orchestrator"] as
-      | { sessionId?: string | null; formerSessionIds?: string[] }
-      | undefined;
-    if (!orch) return out;
-    if (orch.sessionId) out.add(orch.sessionId);
-    if (Array.isArray(orch.formerSessionIds)) for (const s of orch.formerSessionIds) out.add(s);
-  } catch {
-    // Empty set — better to no-op than crash a scan on a malformed registry.
+
+  // 1. agents.json — DM-orchestrator legacy + tests.
+  if (existsSync(agentsPath)) {
+    try {
+      const registry = JSON.parse(readFileSync(agentsPath, "utf-8")) as AgentRegistry;
+      const orch = registry["orchestrator"] as
+        | { sessionId?: string | null; formerSessionIds?: string[] }
+        | undefined;
+      if (orch) {
+        if (orch.sessionId) out.add(orch.sessionId);
+        if (Array.isArray(orch.formerSessionIds)) {
+          for (const s of orch.formerSessionIds) if (s) out.add(s);
+        }
+      }
+    } catch {
+      // Skip malformed registry rather than crashing the scan.
+    }
   }
+
+  // 2. channels.json — live per-channel orchestrator session ids.
+  const channelsPath = join(sessionsDir, "channels.json");
+  if (existsSync(channelsPath)) {
+    try {
+      const channels = JSON.parse(readFileSync(channelsPath, "utf-8")) as Record<string, string>;
+      for (const sid of Object.values(channels)) {
+        if (typeof sid === "string" && sid) out.add(sid);
+      }
+    } catch {
+      // Skip malformed channels file.
+    }
+  }
+
+  // 3. channel-history.json — former per-channel orchestrator session ids.
+  const historyPath = join(sessionsDir, "channel-history.json");
+  if (existsSync(historyPath)) {
+    try {
+      const history = JSON.parse(readFileSync(historyPath, "utf-8")) as Record<string, string[]>;
+      for (const ids of Object.values(history)) {
+        if (!Array.isArray(ids)) continue;
+        for (const sid of ids) if (typeof sid === "string" && sid) out.add(sid);
+      }
+    } catch {
+      // Skip malformed history file.
+    }
+  }
+
   return out;
 }
 

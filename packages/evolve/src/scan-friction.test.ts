@@ -146,6 +146,42 @@ describe("scanFriction", () => {
     expect(signals).toEqual([]);
   });
 
+  it("includes orchestrator sessions from channels.json (per-channel) and channel-history.json", async () => {
+    const sessionsDir = join(workDir, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    const liveChannelSession = "session-channel-live";
+    const formerChannelSession = "session-channel-former";
+    writeFileSync(
+      join(sessionsDir, "channels.json"),
+      JSON.stringify({ "C0AUKV03B7E": liveChannelSession })
+    );
+    writeFileSync(
+      join(sessionsDir, "channel-history.json"),
+      JSON.stringify({ "C0AUKV03B7E": [formerChannelSession] })
+    );
+    // Empty agents.json so the only orchestrator session ids come from sessionsDir.
+    writeRegistry({});
+    writeSessionFile(liveChannelSession, [
+      userTurn("u-live", "no, I said the channel one", "2026-04-27T12:00:00.000Z"),
+    ]);
+    writeSessionFile(formerChannelSession, [
+      userTurn("u-former", "wait, why did you do that?", "2026-04-27T12:00:00.000Z"),
+    ]);
+
+    const scoreFn = async (batch: TurnForScoring[]): Promise<ScoredTurn[]> =>
+      batch.map((t) => ({
+        turn_id: t.turn_id,
+        friction_score: 4,
+        category: "frustration" as const,
+        reason: "test",
+      }));
+
+    const signals = await scanFriction({ projectsRoot, agentsPath, sessionsDir, scoreFn });
+    const sessionIds = signals.flatMap((s) => s.evidencePointers.map((p) => p.sessionId));
+    expect(sessionIds).toContain(liveChannelSession);
+    expect(sessionIds).toContain(formerChannelSession);
+  });
+
   it("includes turns from former orchestrator sessions", async () => {
     writeSessionFile(FORMER_SESSION, [userTurn("u-former", "no, the path is /a not /b")]);
 
