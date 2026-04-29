@@ -104,12 +104,14 @@ export async function enrichProposals(opts: EnrichOptions = {}): Promise<EnrichR
       continue;
     }
 
+    const now = new Date().toISOString();
     const updated = updateProposal(proposal.id, {
       proposedChange: enriched.body,
       type: enriched.type,
       blastRadius: enriched.blastRadius,
-      enrichedAt: new Date().toISOString(),
+      enrichedAt: now,
       enrichedBy: model,
+      updatedAt: now,
     });
     if (updated) {
       result.enriched.push(updated);
