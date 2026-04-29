@@ -91,6 +91,15 @@ describe("parseLine", () => {
   it("returns null for malformed JSON", () => {
     expect(parseLine("{broken")).toBeNull();
   });
+
+  it("normalizes string content to a text block (SDK emits both shapes)", () => {
+    const entry = parseLine(
+      '{"type":"user","message":{"role":"user","content":"hello there"}}'
+    );
+    expect(entry).not.toBeNull();
+    expect(Array.isArray(entry!.message!.content)).toBe(true);
+    expect(entry!.message!.content).toEqual([{ type: "text", text: "hello there" }]);
+  });
 });
 
 describe("parseEntries", () => {
