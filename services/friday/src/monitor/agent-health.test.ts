@@ -23,11 +23,19 @@ vi.mock("../log.js", () => ({
   log: vi.fn(),
 }));
 
+vi.mock("../agent/crash-store.js", () => ({
+  getCrashInfo: vi.fn(() => null),
+}));
+
 import { listAgents } from "../sessions/registry.js";
 import { mailSend } from "../comms/mail.js";
+import { log } from "../log.js";
+import { getCrashInfo } from "../agent/crash-store.js";
 
 const mockListAgents = vi.mocked(listAgents);
 const mockMailSend = vi.mocked(mailSend);
+const mockLog = vi.mocked(log);
+const mockGetCrashInfo = vi.mocked(getCrashInfo);
 
 function makeConfig(overrides?: Partial<HealthCheckConfig>): HealthCheckConfig {
   return {
@@ -63,6 +71,8 @@ describe("runHealthCheck", () => {
     clearActivity("agent-test");
     mockListAgents.mockReturnValue([]);
     mockMailSend.mockClear();
+    mockLog.mockClear();
+    mockGetCrashInfo.mockReturnValue(null);
   });
 
   it("returns no issues for healthy agents", () => {
@@ -167,6 +177,62 @@ describe("runHealthCheck", () => {
 
     const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
     expect(issues).toHaveLength(0);
+  });
+
+  it("attaches exitCode and stderrTail to crashed issue when crash info available", () => {
+    mockListAgents.mockReturnValue([
+      {
+        name: "builder-test",
+        entry: { type: "builder", status: "active", parent: "orchestrator" } as any,
+      },
+    ]);
+    mockGetCrashInfo.mockReturnValue({ exitCode: 1, stderrTail: "Error: something went wrong" });
+
+    const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
+    expect(issues).toHaveLength(1);
+    expect(issues[0].exitCode).toBe(1);
+    expect(issues[0].stderrTail).toBe("Error: something went wrong");
+
+    // Mail body should include exit code and stderr
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("Exit code: 1"),
+      })
+    );
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.stringContaining("Error: something went wrong"),
+      })
+    );
+
+    // Log call should include exitCode and stderrTail
+    expect(mockLog).toHaveBeenCalledWith(
+      "warn",
+      "agent_health_crashed",
+      expect.objectContaining({ exitCode: 1, stderrTail: "Error: something went wrong" })
+    );
+  });
+
+  it("omits crash diag fields from mail when no crash info available", () => {
+    mockListAgents.mockReturnValue([
+      {
+        name: "builder-test",
+        entry: { type: "builder", status: "active", parent: "orchestrator" } as any,
+      },
+    ]);
+    mockGetCrashInfo.mockReturnValue(null);
+
+    const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
+    expect(issues).toHaveLength(1);
+    expect(issues[0].exitCode).toBeUndefined();
+    expect(issues[0].stderrTail).toBeUndefined();
+
+    // Mail body should NOT include exit code header
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.not.stringContaining("Exit code:"),
+      })
+    );
   });
 
   it("clears stall notification when activity resumes", () => {

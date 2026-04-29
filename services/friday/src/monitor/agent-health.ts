@@ -1,6 +1,7 @@
 import { listAgents, getAgent, updateAgentStatus } from "../sessions/registry.js";
 import { mailSend } from "../comms/mail.js";
 import { log } from "../log.js";
+import { getCrashInfo } from "../agent/crash-store.js";
 
 // ── Activity tracking ──────────────────────────────────────────
 
@@ -104,11 +105,16 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
     // Crash detection: agent is active/idle in registry but loop is not running
     if ((entry.status === "active" || entry.status === "idle") && !loopRunning) {
       if (!notifiedCrashed.has(name)) {
+        const crashDiag = getCrashInfo(name);
         const issue: HealthIssue = {
           type: "crashed",
           agentName: name,
           agentType: entry.type,
           message: `Agent "${name}" (${entry.type}) has no running loop but status is "${entry.status}". It may have crashed.`,
+          ...(crashDiag !== null && {
+            exitCode: crashDiag.exitCode,
+            stderrTail: crashDiag.stderrTail,
+          }),
         };
         issues.push(issue);
         notifiedCrashed.add(name);
@@ -119,7 +125,12 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
         // Notify orchestrator
         notifyOrchestrator(issue);
 
-        log("warn", "agent_health_crashed", { agent: name, type: entry.type });
+        log("warn", "agent_health_crashed", {
+          agent: name,
+          type: entry.type,
+          exitCode: crashDiag?.exitCode ?? null,
+          stderrTail: crashDiag?.stderrTail ?? "",
+        });
       }
     } else if (loopRunning) {
       // If loop is running, clear crash notification
@@ -167,17 +178,30 @@ export interface HealthIssue {
   agentName: string;
   agentType: string;
   message: string;
+  exitCode?: number | null;
+  stderrTail?: string;
 }
 
 // ── Notification ───────────────────────────────────────────────
 
 function notifyOrchestrator(issue: HealthIssue): void {
   try {
+    const diagLines: string[] = [];
+    if (issue.exitCode !== undefined) {
+      diagLines.push(`Exit code: ${issue.exitCode ?? "(none)"}`);
+    }
+    if (issue.stderrTail) {
+      diagLines.push(`Last stderr:\n${issue.stderrTail}`);
+    }
+    const body = diagLines.length > 0
+      ? `${issue.message}\n\n${diagLines.join("\n")}`
+      : issue.message;
+
     mailSend({
       from: "health-monitor",
       to: "orchestrator",
       subject: `Agent health: ${issue.agentName} ${issue.type}`,
-      body: issue.message,
+      body,
     });
   } catch (err) {
     log("error", "agent_health_notify_failed", {

@@ -1,5 +1,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentType } from "@friday/shared";
+import { setCrashInfo, clearCrashInfo } from "./crash-store.js";
+export { getCrashInfo } from "./crash-store.js";
 import {
   registerBuilder,
   registerHelper,
@@ -29,15 +31,6 @@ const runningAgents = new Map<
   { abort: AbortController; sessionId: string | null }
 >();
 
-/** Stores crash diagnostics keyed by agent name, cleared on destroy */
-const lastCrashInfo = new Map<string, { exitCode: number | null; stderrTail: string }>();
-
-/**
- * Return the last recorded crash diagnostics for an agent, or null if none.
- */
-export function getCrashInfo(agentName: string): { exitCode: number | null; stderrTail: string } | null {
-  return lastCrashInfo.get(agentName) ?? null;
-}
 
 export interface CreateBuilderOptions {
   name: string;
@@ -161,7 +154,7 @@ export function destroyAgentByName(name: string): void {
   // Stop the running loop
   stopAgentLoop(name);
   clearActivity(name);
-  lastCrashInfo.delete(name);
+  clearCrashInfo(name);
 
   // Workspace is NOT deleted here — soft delete only.
   // Workspace cleanup is a separate, user-directed action.
@@ -233,7 +226,7 @@ function spawnAgentLoop(options: SpawnOptions): void {
     const rawText: string =
       (err instanceof Error ? err.stack ?? err.message : String(err)) ?? "";
     const stderrTail = rawText.split("\n").slice(-10).join("\n");
-    lastCrashInfo.set(options.agentName, { exitCode, stderrTail });
+    setCrashInfo(options.agentName, { exitCode, stderrTail });
 
     log("error", "agent_loop_error", {
       agent: options.agentName,
