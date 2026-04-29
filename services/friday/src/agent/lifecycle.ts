@@ -389,18 +389,20 @@ function forkAgentProcess(spawnOptions: WorkerSpawnOptions): void {
   });
 
   child.on("exit", (code, signal) => {
-    const entry = runningAgents.get(agentName);
-    if (entry) {
-      entry.removeMailListener();
+    // Guard: only act if THIS process is still the current one in the map.
+    // A refork may have already replaced it — we must not evict the new entry.
+    const current = runningAgents.get(agentName);
+    if (current?.process === child) {
+      current.removeMailListener();
       runningAgents.delete(agentName);
+
+      // Mark idle only when this process was still the active one
+      const registryEntry = getAgent(agentName);
+      if (registryEntry && registryEntry.status === "active") {
+        updateAgentStatus(agentName, "idle");
+      }
     }
     log("info", "worker_exited", { agent: agentName, code, signal });
-
-    // If the process exits unexpectedly (not killed by us), mark idle
-    const registryEntry = getAgent(agentName);
-    if (registryEntry && registryEntry.status === "active") {
-      updateAgentStatus(agentName, "idle");
-    }
   });
 
   child.on("error", (err) => {

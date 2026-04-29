@@ -180,8 +180,8 @@ const INTERRUPT_RE: RegExp[] = [
   /^stop[!.?\s]*$/i, // "stop", "stop!" (lone word only)
   /^no[,\s]+don'?t\b/i, // "no don't", "no, don't"
   /\bshoot[,\s]+stop\b/i, // "shoot stop"
-  /^(cancel|abort)(\s+that)?\b/i, // "cancel", "cancel that", "abort"
-  /^(revert|undo)(\s+that)?\b/i, // "revert", "revert that", "undo that"
+  /^(cancel|abort)([!?.]*\s*$|\s+that\b)/i, // "cancel", "cancel that" — not "cancel order"
+  /^(revert|undo)([!?.]*\s*$|\s+that\b)/i, // "revert", "undo" — not "revert merge"
   /^(wait[,\s]+)?no[!?.]*\s*$/i, // "no", "wait no" — not "nobody" or "no problem"
   /^never\s+mind\b/i, // "never mind"
   /^forget\s+that\b/i, // "forget that"

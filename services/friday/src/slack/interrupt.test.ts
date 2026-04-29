@@ -63,6 +63,14 @@ describe("isInterruptSignal", () => {
       ["   "],
       ["can you help me with this?"],
       ["what's the status?"],
+      ["cancel order"],
+      ["cancel the deploy"],
+      ["cancel meeting"],
+      ["abort mission"],
+      ["revert merge"],
+      ["revert the last commit"],
+      ["undo last commit"],
+      ["undo the change"],
     ])('"%s" → not interrupt', (text) => {
       expect(isInterruptSignal(text)).toBe(false);
     });
