@@ -14,7 +14,7 @@ import { mailCheck, mailEvents, buildMailPrompt } from "../comms/mail.js";
 import { createAgentTools } from "./agent-tools.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
-import { updateAgentSession, updateAgentStatus } from "../sessions/registry.js";
+import { loadRegistry, updateAgentSession, updateAgentStatus } from "../sessions/registry.js";
 import type { WorkerCommand, WorkerEvent, WorkerSpawnOptions } from "./worker-protocol.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -45,6 +45,10 @@ let started = false;
 process.on("message", (msg: WorkerCommand) => {
   if (msg.type === "start" && !started) {
     started = true;
+    // Forked children get a fresh module instance, so registry state from the
+    // parent isn't inherited. Bootstrap from agents.json before the loop calls
+    // updateAgentSession/updateAgentStatus.
+    loadRegistry();
     runAgentLoop(msg.options, abort.signal).catch((err) => {
       emit({ type: "error", message: err instanceof Error ? err.message : String(err) });
       process.exit(1);
