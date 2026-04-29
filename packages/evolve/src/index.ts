@@ -34,6 +34,22 @@ export {
 } from "./scan.js";
 
 export {
+  type FrictionCategory,
+  type FrictionScanOptions,
+  type ScoredTurn,
+  type ScoreFn,
+  type TurnForScoring,
+  scanFriction,
+} from "./scan-friction.js";
+
+export {
+  type ChatOptions,
+  type ChatResult,
+  chat,
+  extractJson,
+} from "./llm.js";
+
+export {
   type Cluster,
   type MergeOptions,
   type MergeResult,
@@ -59,6 +75,17 @@ export {
   proposeFromSignals,
   rerankAll,
 } from "./propose.js";
+
+export {
+  type EnrichOptions,
+  type EnrichResult,
+  type EnrichedProposal,
+  type EnrichFn,
+  type EnrichContext,
+  type HydratedEvidence,
+  enrichProposals,
+  hydrateEvidence,
+} from "./enrich.js";
 
 export {
   type RunRecord,

@@ -106,7 +106,14 @@ export function parseLine(line: string): RawEntry | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   try {
-    return JSON.parse(trimmed) as RawEntry;
+    const parsed = JSON.parse(trimmed) as RawEntry;
+    // The SDK emits message.content as either ContentBlock[] OR a plain
+    // string (for simple user prompts). Normalize to the array form so
+    // downstream code can iterate without type-checking every access.
+    if (parsed.message && typeof parsed.message.content === "string") {
+      parsed.message.content = [{ type: "text", text: parsed.message.content }];
+    }
+    return parsed;
   } catch {
     return null;
   }

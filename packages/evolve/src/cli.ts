@@ -6,11 +6,13 @@ import {
   scanFeedback,
   scanUsageLog,
   scanTranscripts,
+  scanFriction,
   sinceHoursAgo,
   proposeFromSignals,
   rerankAll,
   appendRun,
   mergeClusters,
+  enrichProposals,
 } from "./index.js";
 
 const args = process.argv.slice(2);
@@ -19,17 +21,19 @@ const cmd = args[0];
 function help(): void {
   console.log(
     [
-      "friday-evolve — local self-improvement pipeline",
+      "friday-evolve — local self-improvement pipeline (Evolve with Intent)",
       "",
       "Usage:",
-      "  friday-evolve scan [--since-hours N]      Run scan + propose + rerank, write a run record.",
-      "  friday-evolve cluster                     Re-cluster open proposals via Jaccard merge.",
-      "  friday-evolve list [--status STATUS]      List proposals (optionally filter by status).",
-      "  friday-evolve show <id>                   Print a single proposal as JSON.",
-      "  friday-evolve help                        Show this help.",
+      "  friday-evolve scan [--since-hours N]              Run scan + propose + rerank, write a run record.",
+      "  friday-evolve enrich [--id ID|--all] [--force]    Replace templated bodies with Sonnet-written analysis.",
+      "  friday-evolve cluster                             Re-cluster open proposals via Jaccard merge.",
+      "  friday-evolve list [--status STATUS]              List proposals (optionally filter by status).",
+      "  friday-evolve show <id>                           Print a single proposal as JSON.",
+      "  friday-evolve help                                Show this help.",
       "",
       "Defaults:",
       "  --since-hours 24",
+      "  enrich: --all when neither --id nor --all is passed",
     ].join("\n")
   );
 }
@@ -57,12 +61,20 @@ async function main(): Promise<void> {
     const now = new Date();
     const since = sinceHoursAgo(hours, now);
 
-    const signals = [
-      ...scanDaemonLog({ since }),
-      ...scanFeedback({ since }),
-      ...scanUsageLog({ since }),
-      ...scanTranscripts({ since }),
-    ];
+    // Friction is async (Haiku-graded) and may fail on transient API errors —
+    // never let it sink the rest of the scan. Other scanners are pure I/O and
+    // run in parallel.
+    const [daemon, feedback, usage, transcripts, friction] = await Promise.all([
+      Promise.resolve(scanDaemonLog({ since })),
+      Promise.resolve(scanFeedback({ since })),
+      Promise.resolve(scanUsageLog({ since })),
+      Promise.resolve(scanTranscripts({ since })),
+      scanFriction({ since }).catch((err) => {
+        console.error(`friction scanner failed: ${err instanceof Error ? err.message : String(err)}`);
+        return [];
+      }),
+    ]);
+    const signals = [...daemon, ...feedback, ...usage, ...transcripts, ...friction];
     const result = proposeFromSignals(signals, {
       rule: config.evolve,
       createdBy: process.env.FRIDAY_AGENT_NAME ?? "cli",
@@ -81,6 +93,35 @@ async function main(): Promise<void> {
     };
     appendRun(record);
 
+    console.log(JSON.stringify(record, null, 2));
+    return;
+  }
+
+  if (cmd === "enrich") {
+    const id = getFlag("--id");
+    const all = args.includes("--all");
+    const force = args.includes("--force");
+    const limitRaw = getFlag("--limit");
+    const limit = limitRaw ? Number(limitRaw) : undefined;
+    if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
+      console.error("Error: --limit must be a positive number.");
+      process.exit(2);
+    }
+
+    const result = await enrichProposals({
+      id,
+      all: all || !id,
+      force,
+      limit,
+    });
+
+    const record = {
+      ts: new Date().toISOString(),
+      enriched: result.enriched.length,
+      skipped: result.skipped.length,
+      failed: result.failed.length,
+      failures: result.failed,
+    };
     console.log(JSON.stringify(record, null, 2));
     return;
   }
