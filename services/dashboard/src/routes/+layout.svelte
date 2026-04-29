@@ -1,6 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import favicon from '$lib/assets/favicon.svg';
+  import avatar from '$lib/assets/avatar.png';
   import { connectSSE, disconnectSSE, getConnection } from '$lib/events.svelte';
   import { onMount } from 'svelte';
 
@@ -58,10 +59,10 @@
 <div data-theme={theme} class="app-shell">
   <header class="app-header">
     <div class="header-left">
-      <h1 class="logo">
-        <span class="logo-icon">F</span>
+      <a href="/" class="logo">
+        <img class="logo-icon" src={avatar} alt="Friday" />
         <span>Friday</span>
-      </h1>
+      </a>
       <span class="header-sep"></span>
       <div class="header-status">
         <span class="pulse" class:offline={!data.daemonOnline}></span>
@@ -119,12 +120,19 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1.5rem;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-secondary);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    backdrop-filter: blur(8px);
+    border: 1px solid var(--border-subtle);
+    background: var(--header-float-bg);
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(100% - 2rem);
+    max-width: 1260px;
+    z-index: 100;
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border-radius: 999px;
+    box-shadow: var(--shadow-lg);
     gap: 1rem;
   }
 
@@ -151,20 +159,20 @@
     letter-spacing: -0.03em;
     color: var(--text-primary);
     flex-shrink: 0;
+    text-decoration: none;
+    transition: opacity var(--transition-fast);
+  }
+
+  .logo:hover {
+    opacity: 0.8;
   }
 
   .logo-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     width: 1.7rem;
     height: 1.7rem;
     border-radius: var(--radius-sm);
-    background: var(--accent-primary);
-    color: var(--text-inverse);
-    font-family: var(--font-mono);
-    font-size: 0.9rem;
-    font-weight: 700;
+    object-fit: cover;
+    flex-shrink: 0;
   }
 
   .header-sep {
@@ -217,5 +225,6 @@
     max-width: 1200px;
     margin: 0 auto;
     padding: 1.5rem;
+    padding-top: 5.5rem;
   }
 </style>

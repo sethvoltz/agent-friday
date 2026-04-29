@@ -9,6 +9,7 @@
   --bg-card-hover: #fffcf8;
   --bg-code: #f7f0e8;
   --bg-input: #ffffff;
+  --header-float-bg: rgba(255, 251, 245, 0.55);
 
   --text-primary: #2c2418;
   --text-secondary: #6b5d4f;
@@ -68,6 +69,7 @@
   --bg-card-hover: #1f2536;
   --bg-code: #141820;
   --bg-input: #161b24;
+  --header-float-bg: rgba(20, 25, 35, 0.5);
 
   --text-primary: #e2e6ef;
   --text-secondary: #8b93a7;
