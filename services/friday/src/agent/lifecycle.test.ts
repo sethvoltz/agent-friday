@@ -123,6 +123,7 @@ const {
   isAgentRunning,
   getAgentStallState,
   restoreActiveAgents,
+  killAllAgents,
 } = await import("./lifecycle.js");
 
 const { mailEvents } = await import("../comms/mail.js");
@@ -527,6 +528,34 @@ describe("restoreActiveAgents — daemon restart", () => {
 
     expect(mockProcesses.length).toBe(initialForkCount);
     expect(mockRegistry.updateAgentStatus).toHaveBeenCalledWith("builder-no-session", "idle");
+  });
+});
+
+describe("killAllAgents — daemon shutdown", () => {
+  it("sends SIGTERM to all running agents", async () => {
+    spawnBuilder("builder-shutdown-a");
+    spawnBuilder("builder-shutdown-b");
+    const processes = mockProcesses.slice(-2);
+
+    killAllAgents(5_000);
+
+    for (const child of processes) {
+      expect(child._killSignals).toContain("SIGTERM");
+    }
+  });
+
+  it("resolves immediately when no agents are running", async () => {
+    await expect(killAllAgents(5_000)).resolves.toBeUndefined();
+  });
+
+  it("removes all agents from the running map", async () => {
+    spawnBuilder("builder-shutdown-c");
+    spawnBuilder("builder-shutdown-d");
+
+    await killAllAgents(100);
+
+    expect(isAgentRunning("builder-shutdown-c")).toBe(false);
+    expect(isAgentRunning("builder-shutdown-d")).toBe(false);
   });
 });
 

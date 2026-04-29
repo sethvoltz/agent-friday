@@ -502,12 +502,9 @@ function stopAgentProcess(name: string, refork: boolean): void {
 
   const child = running.process;
 
-  // Graceful: send stop command, then SIGTERM, then SIGKILL after 5s
-  if (child.connected) {
-    child.send({ type: "stop" } satisfies WorkerCommand);
-  }
-  child.kill("SIGTERM");
-
+  // Graceful: send stop command, then SIGTERM, then SIGKILL after 5s.
+  // Register the exit listener BEFORE sending SIGTERM to avoid a race
+  // where a fast-exiting process fires the event before the listener is set.
   const forceKillTimer = setTimeout(() => {
     child.kill("SIGKILL");
   }, 5_000);
@@ -518,6 +515,11 @@ function stopAgentProcess(name: string, refork: boolean): void {
       forkAgentProcess(running.spawnOptions);
     }
   });
+
+  if (child.connected) {
+    child.send({ type: "stop" } satisfies WorkerCommand);
+  }
+  child.kill("SIGTERM");
 
   log("info", "agent_loop_stopped", { agent: name });
 }
