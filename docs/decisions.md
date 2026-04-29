@@ -325,3 +325,30 @@ User-editable files (`config.json`, `agents.json`, `*.md`) stay as files. The DB
 - FTS5 virtual tables and triggers aren't modeled by Drizzle and live in `runMigrations()` as raw SQL (idempotent `CREATE … IF NOT EXISTS`).
 - The transcript indexer must skip live sessions (sessionId in the registry) because the SDK is still appending; otherwise it could cache a stale `lastTimestamp`.
 - See `.claude/rules/drizzle-migrations.md` for migration discipline future agents must follow.
+
+## ADR-021: Two-Tier LLM Evolve Pipeline (Haiku Breadth + Sonnet Depth)
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+**Context:** Phase 1 evolve shipped templated proposal bodies with the placeholder "Phase 1 placeholder body. Phase 4 LLM passes will rewrite this…" — an LLM rewrite step that was promised but never built. Separately, the existing scanners (`scanDaemonLog`, `scanFeedback`, `scanUsageLog`, `scanTranscripts`) only catch *operational* pain (crashes, retry bursts, token spikes). They miss the slow drip of *trust erosion* — short user corrections like "no, I said…", "wait, why did you…", "hey, I thought we were…" — which is the single most important signal that Friday is no longer behaving as the user's right hand. Friday is positioned as the user's most-trusted assistant; the improvement loop has to listen for that erosion specifically.
+
+**Decision:** Split LLM use across two tiers and add friction as a first-class signal dimension under the "Evolve with Intent" framing.
+
+1. **Haiku for breadth — friction scoring.** `scan-friction.ts` walks orchestrator transcripts only (current + former session ids from `agents.json`), pairs each user turn with its prior assistant text, batches 30 turns per call, and asks Haiku to score each on a 0-5 scale plus one of `correction|confusion|repeat|reset|frustration|doubt|redirect|none`. Score ≥ 2 with a non-`none` category becomes a `friction_<category>` signal; below that is dropped. Severity tiering: 4-5 → high, 3 → medium, 2 → low. Up to 3 highest-friction evidence pointers per signal. Tool-result-only turns and `<memory-context>` blocks are filtered before scoring.
+2. **Sonnet for depth — proposal enrichment.** `enrich.ts` rewrites templated proposal bodies one at a time. Each call hydrates the signal's evidence pointers (±2 lines around `pointer.line`, capped at 2000 chars), then asks Sonnet for `{body, type, blastRadius}` with sections **Signal summary** | **Root cause** | **Suggested change**. Idempotent: skips when `enrichedAt >= updatedAt` unless `--force`. The system prompt explicitly flags `friction_*` signals as trust-erosion indicators that deserve extra care (typically a memory or system-prompt edit that prevents the next instance).
+3. **Both tiers use the agent SDK** (`query()` from `@anthropic-ai/claude-agent-sdk`) with `allowedTools: []` and `permissionMode: "bypassPermissions"`. This keeps Pro/Max subscription billing (ADR-003) — no `ANTHROPIC_API_KEY` required.
+4. **Wired into existing meta-agents.** `scheduled-meta-daily` and `scheduled-meta-weekly` now run `scan → enrich → list` (and `cluster` for weekly). Friction scanning is failure-isolated in the CLI: a transient Haiku error returns `[]` so the rest of the scan still produces a record.
+
+**Rationale:**
+- **Two tiers, not one.** Sonnet on every transcript turn would be wasteful and slow; Haiku on every proposal body would be too shallow. Haiku grades hundreds of cheap items (turns); Sonnet writes a few dozen expensive items (proposal bodies).
+- **Sentiment over regex.** A patterned regex for friction phrases ("no, I said", "wait, why") would catch the obvious cases and miss everything else. Haiku reads tone, including negative cases ("no problem" = 0). Volume is low (daily / weekly with ≤7 day windows), so the cost is bounded.
+- **Idempotency is non-negotiable.** Daily scans re-run forever. Without `enrichedAt >= updatedAt` skipping, every daily pass would re-call Sonnet on every proposal. The check on `updatedAt` means freshly merged signals trigger re-enrichment naturally.
+- **Friction signals belong inside the same Proposal datatype.** Same `signalHash` collapsing, same scoring, same review surface. The `key` prefix `friction_*` is the only marker the orchestrator and apply path need.
+- **Self-exclusion still applies.** Friction scoring runs against the orchestrator's transcripts only; meta-agent transcripts are already excluded because their session ids aren't in the orchestrator's current/former list.
+
+**Consequences:**
+- New runtime dep on `@anthropic-ai/claude-agent-sdk` inside `@friday/evolve` (already a dep of `@friday/daemon`, so install cost is shared).
+- Daily scan latency increases by the Haiku batch time (rough order: a few seconds at typical volume) plus the Sonnet enrichment time per stale proposal. This is fine on a cron-driven agent.
+- Friction signals can produce noisy proposals if Haiku grades a sarcastic-but-positive turn as `correction`. The severity floor (≥ 2) and the `none` category are the main guardrails; if false-positive rate is a problem, raise the floor or add a second confirmation pass.
+- Templated proposal bodies remain readable on first sight — the enrichment pass is additive, not gating. Listing/show works even before enrichment runs.

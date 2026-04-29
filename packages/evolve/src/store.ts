@@ -65,6 +65,13 @@ export interface Proposal {
   updatedAt: string;
   appliedAt: string | null;
   appliedBy: string | null;
+  /**
+   * Set by `friday-evolve enrich`. Marks when the body was rewritten by the
+   * Sonnet pass. Stale if `updatedAt > enrichedAt` (signals changed since).
+   */
+  enrichedAt: string | null;
+  /** Model used for the enrichment call. NULL if the body is still templated. */
+  enrichedBy: string | null;
 }
 
 export function ensureImprovementsDirs(): void {
@@ -107,6 +114,8 @@ export function parseProposal(id: string, raw: string): Proposal {
     updatedAt: fields.updatedAt ?? new Date().toISOString(),
     appliedAt: fields.appliedAt ?? null,
     appliedBy: fields.appliedBy ?? null,
+    enrichedAt: fields.enrichedAt ?? null,
+    enrichedBy: fields.enrichedBy ?? null,
   };
 }
 
@@ -127,6 +136,8 @@ export function serializeProposal(p: Proposal): string {
     `updatedAt: "${p.updatedAt}"`,
     `appliedAt: ${p.appliedAt ? `"${p.appliedAt}"` : "null"}`,
     `appliedBy: ${p.appliedBy ? `"${p.appliedBy}"` : "null"}`,
+    `enrichedAt: ${p.enrichedAt ? `"${p.enrichedAt}"` : "null"}`,
+    `enrichedBy: ${p.enrichedBy ? `"${p.enrichedBy}"` : "null"}`,
     `signals: ${JSON.stringify(p.signals)}`,
     "---",
     "",
@@ -175,6 +186,8 @@ export function saveProposal(input: SaveProposalInput): Proposal {
     updatedAt: now,
     appliedAt: null,
     appliedBy: null,
+    enrichedAt: null,
+    enrichedBy: null,
   };
 
   writeFileSync(filePath(id), serializeProposal(proposal));
@@ -189,6 +202,7 @@ export function getProposal(id: string): Proposal | null {
 
 export interface UpdateProposalInput {
   title?: string;
+  type?: ProposalType;
   status?: ProposalStatus;
   score?: number;
   signals?: Signal[];
@@ -198,6 +212,8 @@ export interface UpdateProposalInput {
   clusterId?: string | null;
   appliedAt?: string | null;
   appliedBy?: string | null;
+  enrichedAt?: string | null;
+  enrichedBy?: string | null;
 }
 
 export function updateProposal(id: string, updates: UpdateProposalInput): Proposal | null {

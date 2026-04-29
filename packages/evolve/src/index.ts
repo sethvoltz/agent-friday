@@ -77,6 +77,17 @@ export {
 } from "./propose.js";
 
 export {
+  type EnrichOptions,
+  type EnrichResult,
+  type EnrichedProposal,
+  type EnrichFn,
+  type EnrichContext,
+  type HydratedEvidence,
+  enrichProposals,
+  hydrateEvidence,
+} from "./enrich.js";
+
+export {
   type RunRecord,
   RUNS_LOG_PATH,
   appendRun,

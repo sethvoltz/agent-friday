@@ -88,9 +88,10 @@ interface Draft {
 }
 
 /**
- * Templated proposal body keyed off the daemon event name. These are
- * intentionally terse — phase 4 LLM passes will rewrite them with richer
- * synthesis once the data plumbing is proven.
+ * Templated proposal body keyed off the daemon event name. The `friday-evolve
+ * enrich` pass replaces this body with Sonnet-generated root-cause analysis +
+ * suggested change once a proposal lands; until then this stub gives the
+ * dashboard and the meta-agent something readable.
  */
 function draftFromSignal(signal: Signal): Draft {
   const agent = signal.agent ? ` for agent \`${signal.agent}\`` : "";
@@ -105,7 +106,7 @@ function draftFromSignal(signal: Signal): Draft {
     "",
     `**Evidence**: ${signal.evidencePointers.length} pointer${signal.evidencePointers.length === 1 ? "" : "s"} into \`${signal.source}\` source.`,
     "",
-    `_Phase 1 placeholder body. Phase 4 LLM passes will rewrite this with root-cause analysis and a concrete suggested change._`,
+    `_Awaiting enrichment. Run \`friday-evolve enrich\` to replace this with root-cause analysis and a concrete suggested change._`,
   ].join("\n");
 
   // Phase 1 only emits "memory" type proposals: the safest surface to apply
