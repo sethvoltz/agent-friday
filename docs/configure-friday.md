@@ -1,17 +1,13 @@
 # Configure Friday
 
-All runtime configuration and state lives in `~/.friday/`. This guide covers initial setup and available options.
+All runtime configuration and state lives in `~/.friday/`. The recommended path is to run `./bin/friday setup` (see [setup-friday.md](setup-friday.md)) — it creates the directory layout, writes `.env` and `config.json`, and initializes the beads database. This guide is the reference for the config fields it produces.
 
-## Directory Setup
+## Manual Setup (alternative)
 
-```bash
-mkdir -p ~/.friday/sessions ~/.friday/working/workspaces ~/.friday/repos
-```
-
-The beads database should already be initialized per [setup-friday.md](setup-friday.md#beads-bd). If not:
+If you'd rather configure by hand:
 
 ```bash
-mkdir -p ~/.friday/beads
+mkdir -p ~/.friday/sessions ~/.friday/working/workspaces ~/.friday/repos ~/.friday/beads
 cd ~/.friday/beads && bd init --non-interactive --prefix friday --skip-agents --skip-hooks
 ```
 

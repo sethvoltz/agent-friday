@@ -4,47 +4,32 @@ This guide covers prerequisites, creating the Slack app, and obtaining tokens. F
 
 ## Prerequisites
 
-### Claude Code CLI
+### CLI tools
 
-Friday runs Claude Code sessions via the Agent SDK. You need the CLI installed and authenticated:
-
-```bash
-npm install -g @anthropic-ai/claude-code
-claude --version   # Verify installation
-```
-
-You must be logged in with an active Pro or Max subscription. No `ANTHROPIC_API_KEY` is needed — billing goes through your subscription (see ADR-003 in [decisions.md](decisions.md)).
-
-### GitHub CLI (`gh`)
-
-Builders use `gh` for cloning repos and opening PRs:
+Friday depends on three external CLIs: **Claude Code** (runs Agent SDK sessions), **`gh`** (Builders use it for clone + PRs), and **`bd`** ([Beads](https://github.com/steveyegge/beads), the backing store for inter-agent mail/tasks). Install them all from the included [`Brewfile`](../Brewfile):
 
 ```bash
-brew install gh     # macOS
-gh auth login       # Authenticate with GitHub
-gh auth status      # Verify
+brew bundle --file=Brewfile
+
+claude --version    # Verify Claude Code
+gh --version        # Verify gh
+bd --version        # Verify Beads
 ```
 
-### Beads (`bd`)
-
-The inter-agent task and mail system uses Beads as its backing store:
+Then authenticate Claude Code (Pro or Max subscription — no `ANTHROPIC_API_KEY` needed; billing goes through your subscription, see ADR-003 in [decisions.md](decisions.md)) and GitHub:
 
 ```bash
-# Install beads (see beads repo for latest instructions)
-npm install -g @beads/bd
-
-# Initialize the Friday beads database
-mkdir -p ~/.friday/beads
-cd ~/.friday/beads && bd init --non-interactive --prefix friday --skip-agents --skip-hooks
+gh auth login
+gh auth status
 ```
 
-The beads database lives at `~/.friday/beads/`. All agents reference this path via the `BEADS_DIR` constant.
+The Friday beads database lives at `~/.friday/beads/` and is initialized automatically by `friday setup` (below). All agents reference this path via the `BEADS_DIR` constant.
 
 ### Node.js & pnpm
 
 ```bash
-node --version   # v20+ required
-pnpm --version   # v9+ required
+node --version   # v22+ required
+pnpm --version   # v10+ required
 ```
 
 ## 1. Create the Slack App
@@ -115,7 +100,17 @@ In Slack, go to your orchestrator channel and type:
 /invite @Friday
 ```
 
+## 4. Run `friday setup`
+
+From the repo root, run the interactive setup. It creates `~/.friday/`, prompts for the tokens you just created, asks for the orchestrator channel ID, and initializes the beads database:
+
+```bash
+./bin/friday setup
+```
+
+Pass `--yes` to skip prompts and accept current/default values. Setup ends by running `friday doctor` so you can confirm everything is wired up.
+
 ## Next Steps
 
-- [Configure Friday](configure-friday.md) — set up tokens, config, and channel mapping
+- [Configure Friday](configure-friday.md) — config file reference and tunable options
 - [Running Friday](running.md) — start the daemon in dev or production mode

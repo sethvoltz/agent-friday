@@ -16,6 +16,8 @@ export interface CheckResult {
   name: string;
   message: string;
   group: string;
+  /** True if this result would be remediated by `brew bundle --file=Brewfile`. */
+  brewfile?: boolean;
 }
 
 interface Check {
@@ -34,6 +36,10 @@ function warn(group: string, name: string, message: string): CheckResult {
 
 function fail(group: string, name: string, message: string): CheckResult {
   return { status: "fail", group, name, message };
+}
+
+function brewfileFix(r: CheckResult): CheckResult {
+  return { ...r, brewfile: true };
 }
 
 function whichCmd(bin: string): boolean {
@@ -56,6 +62,57 @@ function cmdVersion(cmd: string): string | null {
 function parseMajor(version: string): number | null {
   const match = version.replace(/^v/, "").match(/^(\d+)/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+/** Extract the first semver-shaped substring from version output. */
+function parseVersion(raw: string | null): string | null {
+  if (!raw) return null;
+  const m = raw.match(/(\d+\.\d+(?:\.\d+)?)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Ask Homebrew whether a managed package is behind. Returns latest version when
+ * outdated, or null when fresh / not brew-managed / brew unavailable.
+ */
+function brewLatestIfOutdated(name: string, isCask: boolean): string | null {
+  try {
+    const flag = isCask ? "--cask" : "--formula";
+    const out = execSync(`brew outdated ${flag} --json ${name}`, {
+      stdio: "pipe",
+      encoding: "utf-8",
+    });
+    const data = JSON.parse(out);
+    const list = isCask ? data.casks : data.formulae;
+    if (!Array.isArray(list) || list.length === 0) return null;
+    return list[0]?.current_version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Check a brew-managed external CLI: presence + version freshness. */
+function checkBrewTool(opts: {
+  bin: string;
+  pkg: string;
+  isCask: boolean;
+  severity: "fail" | "warn";
+}): CheckResult {
+  const { bin, pkg, isCask, severity } = opts;
+  const sev = severity === "fail" ? fail : warn;
+
+  if (!whichCmd(bin)) {
+    return brewfileFix(sev("Tools", bin, "not installed"));
+  }
+
+  const version = parseVersion(cmdVersion(`${bin} --version`));
+  const latest = brewLatestIfOutdated(pkg, isCask);
+  if (latest) {
+    return brewfileFix(
+      warn("Tools", bin, `${version ?? "?"} — outdated, latest ${latest}`),
+    );
+  }
+  return pass("Tools", bin, version ?? "found on PATH");
 }
 
 // ── ANSI helpers ────────────────────────────────────────────────────────
@@ -152,7 +209,7 @@ const checks: Check[] = [
       if (!version) return fail("Tools", "Node.js", "not found on PATH");
       const major = parseMajor(version);
       if (major === null) return fail("Tools", "Node.js", `could not parse version: ${version}`);
-      if (major < 20) return fail("Tools", "Node.js", `${version} — requires >= 20`);
+      if (major < 22) return fail("Tools", "Node.js", `${version} — requires >= 22`);
       return pass("Tools", "Node.js", version);
     },
   },
@@ -164,33 +221,24 @@ const checks: Check[] = [
       if (!version) return warn("Tools", "pnpm", "not found on PATH");
       const major = parseMajor(version);
       if (major === null) return warn("Tools", "pnpm", `could not parse version: ${version}`);
-      if (major < 9) return warn("Tools", "pnpm", `${version} — recommend >= 9`);
+      if (major < 10) return warn("Tools", "pnpm", `${version} — recommend >= 10`);
       return pass("Tools", "pnpm", version);
     },
   },
   {
     group: "Tools",
     name: "claude",
-    run: () =>
-      whichCmd("claude")
-        ? pass("Tools", "claude", "found on PATH")
-        : fail("Tools", "claude", "not found — install Claude Code"),
+    run: () => checkBrewTool({ bin: "claude", pkg: "claude-code", isCask: true, severity: "fail" }),
   },
   {
     group: "Tools",
     name: "gh",
-    run: () =>
-      whichCmd("gh")
-        ? pass("Tools", "gh", "found on PATH")
-        : warn("Tools", "gh", `not found — ${dim("brew install gh")}`),
+    run: () => checkBrewTool({ bin: "gh", pkg: "gh", isCask: false, severity: "warn" }),
   },
   {
     group: "Tools",
     name: "bd",
-    run: () =>
-      whichCmd("bd")
-        ? pass("Tools", "bd", "found on PATH")
-        : warn("Tools", "bd", `not found — ${dim("brew install beads")}`),
+    run: () => checkBrewTool({ bin: "bd", pkg: "beads", isCask: false, severity: "warn" }),
   },
 
   // ── Services ──────────────────────────────────
@@ -286,6 +334,11 @@ export function printResults(results: CheckResult[], durationMs?: number): void 
   const allGood = fails === 0 && warns === 0;
   const verdict = allGood ? `  ${green("\u2713")} ${bold("All good")}` : `  ${parts.join(dim(" \u00b7 "))}`;
   console.log(verdict + timing);
+
+  // Consolidated remediation hint when any tool is missing or out of date.
+  if (results.some((r) => r.brewfile)) {
+    console.log(`  ${dim("\u2192")} Update brew tools: ${dim("brew bundle --file=Brewfile")}`);
+  }
   console.log();
 }
 

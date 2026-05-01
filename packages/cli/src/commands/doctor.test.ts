@@ -40,7 +40,9 @@ vi.mock("node:child_process", () => ({
     if (cmd.startsWith("which claude")) return "/usr/local/bin/claude";
     if (cmd.startsWith("which")) throw new Error("not found");
     if (cmd === "node --version") return "v22.0.0";
-    if (cmd === "pnpm --version") return "9.1.0";
+    if (cmd === "pnpm --version") return "10.0.0";
+    if (cmd === "claude --version") return "2.1.118 (Claude Code)";
+    if (cmd.startsWith("brew outdated")) return '{"formulae":[],"casks":[]}';
     if (cmd.startsWith("curl")) throw new Error("connection refused");
     return "";
   }),
@@ -139,6 +141,41 @@ describe("friday doctor", () => {
       expect(["pass", "warn", "fail"]).toContain(r.status);
       expect(r.name).toBeTruthy();
       expect(r.message).toBeTruthy();
+    }
+  });
+
+  it("flags missing brew tools for brewfile remediation", async () => {
+    const results = await runChecks();
+    const gh = results.find((r) => r.name === "gh");
+    const bd = results.find((r) => r.name === "bd");
+    // gh and bd are not installed in the test env, so they should warn
+    // and be flagged as brewfile-fixable.
+    expect(gh?.status).toBe("warn");
+    expect(gh?.brewfile).toBe(true);
+    expect(bd?.status).toBe("warn");
+    expect(bd?.brewfile).toBe(true);
+  });
+
+  it("warns when a brew tool is outdated and reports the latest version", async () => {
+    const cp = await import("node:child_process");
+    const mockFn = cp.execSync as unknown as ReturnType<typeof vi.fn>;
+    const baseImpl = mockFn.getMockImplementation()!;
+    mockFn.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("brew outdated --cask --json claude-code")) {
+        return '{"formulae":[],"casks":[{"name":"claude-code","installed_versions":["2.1.118"],"current_version":"2.2.0"}]}';
+      }
+      return baseImpl(cmd);
+    });
+
+    try {
+      const results = await runChecks();
+      const claude = results.find((r) => r.name === "claude");
+      expect(claude?.status).toBe("warn");
+      expect(claude?.message).toContain("outdated");
+      expect(claude?.message).toContain("2.2.0");
+      expect(claude?.brewfile).toBe(true);
+    } finally {
+      mockFn.mockImplementation(baseImpl);
     }
   });
 });

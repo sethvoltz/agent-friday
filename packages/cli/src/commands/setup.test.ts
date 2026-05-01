@@ -68,7 +68,9 @@ vi.mock("node:child_process", () => ({
     if (cmd.startsWith("which claude")) return "/usr/local/bin/claude";
     if (cmd.startsWith("which")) throw new Error("not found");
     if (cmd === "node --version") return "v22.0.0";
-    if (cmd === "pnpm --version") return "9.1.0";
+    if (cmd === "pnpm --version") return "10.0.0";
+    if (cmd === "claude --version") return "2.1.118 (Claude Code)";
+    if (cmd.startsWith("brew outdated")) return '{"formulae":[],"casks":[]}';
     if (cmd.startsWith("curl")) throw new Error("connection refused");
     return "";
   }),
