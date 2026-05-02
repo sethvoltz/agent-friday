@@ -24,11 +24,19 @@ vi.mock("../log.js", () => ({
   log: vi.fn(),
 }));
 
+vi.mock("../agent/crash-store.js", () => ({
+  getCrashInfo: vi.fn(() => null),
+}));
+
 import { listAgents } from "../sessions/registry.js";
 import { mailSend } from "../comms/mail.js";
+import { log } from "../log.js";
+import { getCrashInfo } from "../agent/crash-store.js";
 
 const mockListAgents = vi.mocked(listAgents);
 const mockMailSend = vi.mocked(mailSend);
+const mockLog = vi.mocked(log);
+const mockGetCrashInfo = vi.mocked(getCrashInfo);
 
 function makeConfig(overrides?: Partial<HealthCheckConfig>): HealthCheckConfig {
   return {
@@ -67,6 +75,8 @@ describe("runHealthCheck — crash detection", () => {
     clearNotifications();
     mockListAgents.mockReturnValue([]);
     mockMailSend.mockClear();
+    mockLog.mockClear();
+    mockGetCrashInfo.mockReturnValue(null);
   });
 
   it("detects crashed agent (loop not running)", () => {
@@ -111,6 +121,52 @@ describe("runHealthCheck — crash detection", () => {
     }]);
     const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
     expect(issues).toHaveLength(0);
+  });
+});
+
+describe("runHealthCheck — crash diagnostics", () => {
+  beforeEach(() => {
+    clearNotifications();
+    mockListAgents.mockReturnValue([]);
+    mockMailSend.mockClear();
+    mockLog.mockClear();
+    mockGetCrashInfo.mockReturnValue(null);
+  });
+
+  it("attaches exitCode and stderrTail to crashed issue when crash info available", () => {
+    mockListAgents.mockReturnValue([makeActiveAgent("builder-test")]);
+    mockGetCrashInfo.mockReturnValue({ exitCode: 1, stderrTail: "Error: something went wrong" });
+
+    const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
+    expect(issues).toHaveLength(1);
+    expect(issues[0].exitCode).toBe(1);
+    expect(issues[0].stderrTail).toBe("Error: something went wrong");
+
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Exit code: 1") })
+    );
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Error: something went wrong") })
+    );
+    expect(mockLog).toHaveBeenCalledWith(
+      "warn",
+      "agent_health_crashed",
+      expect.objectContaining({ exitCode: 1, stderrTail: "Error: something went wrong" })
+    );
+  });
+
+  it("omits crash diag fields from mail when no crash info available", () => {
+    mockListAgents.mockReturnValue([makeActiveAgent("builder-test")]);
+    mockGetCrashInfo.mockReturnValue(null);
+
+    const issues = runHealthCheck(makeConfig({ isAgentRunning: () => false }));
+    expect(issues).toHaveLength(1);
+    expect(issues[0].exitCode).toBeUndefined();
+    expect(issues[0].stderrTail).toBeUndefined();
+
+    expect(mockMailSend).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining("Exit code:") })
+    );
   });
 });
 

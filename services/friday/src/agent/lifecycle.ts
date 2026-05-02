@@ -2,6 +2,8 @@ import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { AgentType } from "@friday/shared";
+import { setCrashInfo, clearCrashInfo } from "./crash-store.js";
+export { getCrashInfo } from "./crash-store.js";
 import {
   registerBuilder,
   registerHelper,
@@ -59,6 +61,7 @@ interface RunningAgent {
 const runningAgents = new Map<string, RunningAgent>();
 
 // ── Public types ──────────────────────────────────────────────────────────
+
 
 export interface CreateBuilderOptions {
   name: string;
@@ -176,6 +179,7 @@ export function destroyAgentByName(name: string): void {
 
   stopAgentProcess(name, false);
   clearActivity(name);
+  clearCrashInfo(name);
   clearFileTracking(name);
 
   if (entry.type === "builder" && entry.workspace) {
@@ -356,7 +360,18 @@ function forkAgentProcess(spawnOptions: WorkerSpawnOptions): void {
 
   const child = fork(WORKER_PATH, [], {
     execArgv: process.execArgv, // propagate tsx loader flags in dev mode
+    stdio: ["inherit", "inherit", "pipe", "ipc"],
   });
+
+  // Rolling 10-line stderr buffer for crash diagnostics
+  const stderrLines: string[] = [];
+  if (child.stderr) {
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrLines.push(...chunk.split("\n").filter(Boolean));
+      if (stderrLines.length > 10) stderrLines.splice(0, stderrLines.length - 10);
+    });
+  }
 
   const stall: StallState = {
     lastChunkAt: Date.now(),
@@ -395,6 +410,14 @@ function forkAgentProcess(spawnOptions: WorkerSpawnOptions): void {
     if (current?.process === child) {
       current.removeMailListener();
       runningAgents.delete(agentName);
+
+      // Capture crash diagnostics on unexpected exit
+      if (code !== 0 || signal) {
+        setCrashInfo(agentName, {
+          exitCode: typeof code === "number" ? code : null,
+          stderrTail: stderrLines.slice(-10).join("\n"),
+        });
+      }
 
       // Mark idle only when this process was still the active one
       const registryEntry = getAgent(agentName);
