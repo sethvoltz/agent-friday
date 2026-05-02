@@ -61,6 +61,11 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/comms/mail-poller.ts` | Polls for orchestrator mail and triggers turns via `sendToAgent` |
 | `src/events/bus.ts` | Singleton EventBus — typed EventEmitter with monotonic seq, ring buffer (200 events), replay for SSE reconnects |
 | `src/events/server.ts` | SSE HTTP server (Node built-in `http`) — `/events` endpoint streams `FridayEvent`s, `/health` liveness check, CORS, `Last-Event-ID` replay |
+| `src/linear/mcp.ts` | Builds the stdio MCP server config for `@tacticlaunch/mcp-linear` — gated on `LINEAR_API_KEY`. See ADR-026. |
+| `src/linear/reconcile.ts` | Daemon-side startup pass — queries Linear GraphQL for In Progress tickets in the Friday team, cross-references with live builders via the bead back-reference comment marker, posts orphan list to Slack. Does not auto-respawn. |
+| `src/linear/constants.ts` | Re-exports Linear constants (`FRIDAY_TEAM_ID`, `EVOLVE_LABEL`, `FRIDAY_BEAD_MARKER`, `LINEAR_MCP_NAME`, `LINEAR_MCP_PACKAGE`, `EVOLVE_NOTIFICATION_SCORE_THRESHOLD`) from `@friday/shared`. |
+| `src/agent/prompts/protocols/linear.md` | Built-in orchestrator protocol — claim flow, lifecycle transitions, blocker linking, response format recipes, evolve notification handling. Loaded at module-top by `prime.ts` and appended to the orchestrator system prompt. |
+| `src/agent/prompts/protocols/linear-builder.md` | Built-in builder/helper protocol — read bead metadata, fetch full Linear ticket, use `gitBranchName` for branches, no status flips. |
 
 ### Shared Package (`packages/shared`)
 
@@ -233,6 +238,8 @@ All persistent state lives in `~/.friday/`:
 Agent SDK sessions are stored by Claude Code in `~/.claude/projects/<encoded-cwd>/`.
 
 ## Service Lifecycle
+
+**Daemon startup sequence** (in `src/index.ts`): config load → DB migrations → memory reconcile → load sessions/registry → init orchestrator → register Slack handlers → start health/event/transcript indexer → Slack preflight cleanup → start mail poller → restore active agents → **Linear orphan reconciliation** (queries In Progress tickets in the Friday team, surfaces orphans to Slack — see ADR-026) → seed scheduled meta agents → start scheduler → start agent health monitor.
 
 Services (daemon, dashboard) are managed by the `friday` CLI in one of two modes — both expose the same agent-readable surface so an autonomous agent can answer "is this service up, in what shape, where are the logs" without sniffing process state directly.
 
@@ -443,6 +450,7 @@ Agents interact with the system via MCP tool servers injected into their session
 | `friday-scheduler` | `schedule_create`, `schedule_list`, `schedule_show`, `schedule_preview`, `schedule_pause`, `schedule_resume`, `schedule_update`, `schedule_revert`, `schedule_delete`, `schedule_trigger` | Orchestrator |
 | `friday-memory` | `memory_search`, `memory_save`, `memory_update`, `memory_get`, `memory_forget` | Orchestrator, Bare sessions (auto-recall context block injected before every turn) |
 | `friday-evolve` | `evolve_list`, `evolve_show`, `evolve_approve`, `evolve_reject`, `evolve_summarize_critical` | Orchestrator |
+| `linear` (third-party stdio MCP, `@tacticlaunch/mcp-linear@1.0.14`) | `linear_getIssueById`, `linear_getIssues`, `linear_searchIssues`, `linear_updateIssue`, `linear_createComment`, `linear_createIssueRelation`, `linear_getWorkflowStates`, etc. | All agent types when `LINEAR_API_KEY` is set. Lifecycle ownership encoded in `prompts/protocols/linear.md` (orchestrator owns status transitions; builders read-only via convention). See ADR-026. |
 
 ### Workspaces
 

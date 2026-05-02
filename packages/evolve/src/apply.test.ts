@@ -36,7 +36,7 @@ describe("applyProposal", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it("materializes a memory-type proposal as a memory entry", () => {
+  it("materializes a memory-type proposal as a memory entry", async () => {
     const p = saveProposal({
       title: "Crash repeating on builder-foo",
       type: "memory",
@@ -49,7 +49,7 @@ describe("applyProposal", () => {
       status: "critical",
     });
 
-    const outcome = applyProposal(p.id, { appliedBy: "orchestrator" });
+    const outcome = await applyProposal(p.id, { appliedBy: "orchestrator" });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.appliedRef).toMatch(/^memory:/);
@@ -68,7 +68,7 @@ describe("applyProposal", () => {
     expect(body).toContain("evolve");
   });
 
-  it("dispatches a code-type proposal to a Beads epic and mails the orchestrator", () => {
+  it("dispatches a high-signal code proposal to Linear AND mails the orchestrator", async () => {
     const p = saveProposal({
       title: "Refactor mail poller",
       type: "code",
@@ -84,48 +84,95 @@ describe("applyProposal", () => {
       blastRadius: "high",
       appliesTo: ["services/friday/src/comms/mail-poller.ts"],
       createdBy: "cli",
+      score: 90, // high-signal — triggers mail
     });
 
-    const calls: string[][] = [];
-    const runBd = (args: string[]): string => {
-      calls.push(args);
-      return calls.length === 1 ? "friday-42" : "friday-43";
+    const linearCalls: Array<{ teamId: string; title: string; description: string; priority: number; labels: string[] }> = [];
+    const createLinearTicket = async (input: { teamId: string; title: string; description: string; priority: number; labels: string[] }) => {
+      linearCalls.push(input);
+      return { identifier: "FRI-99", url: "https://linear.app/voltz-makes/issue/FRI-99" };
     };
 
-    const outcome = applyProposal(p.id, { appliedBy: "orchestrator", runBd });
+    const bdCalls: string[][] = [];
+    const runBd = (args: string[]): string => {
+      bdCalls.push(args);
+      return "friday-mail-1";
+    };
+
+    const outcome = await applyProposal(p.id, {
+      appliedBy: "orchestrator",
+      createLinearTicket,
+      runBd,
+    });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.epicId).toBe("friday-42");
-    expect(outcome.appliedRef).toBe("epic:friday-42");
-    expect(outcome.restartHint).toMatch(/friday-43/);
+    expect(outcome.ticketId).toBe("FRI-99");
+    expect(outcome.ticketUrl).toBe("https://linear.app/voltz-makes/issue/FRI-99");
+    expect(outcome.appliedRef).toBe("linear:FRI-99");
     expect(outcome.restartHint).toMatch(/orchestrator/i);
 
-    expect(calls).toHaveLength(2);
-    // First call seeds the epic.
-    expect(calls[0][0]).toBe("create");
-    expect(calls[0][1]).toMatch(/^Evolve: /);
-    expect(calls[0]).toContain("--epic");
-    const epicBody = calls[0][calls[0].indexOf("-d") + 1];
-    expect(epicBody).toContain("Move to push-based delivery via SSE.");
-    expect(epicBody).toContain("daemon.jsonl");
-    expect(epicBody).toContain("services/friday/src/comms/mail-poller.ts");
-    // Second call mails the orchestrator with from:evolve label.
-    expect(calls[1][0]).toBe("create");
-    expect(calls[1]).toContain("orchestrator");
-    const labels = calls[1][calls[1].indexOf("-l") + 1];
+    // Linear ticket created with correct shape
+    expect(linearCalls).toHaveLength(1);
+    expect(linearCalls[0].title).toMatch(/^Evolve: /);
+    expect(linearCalls[0].priority).toBe(1); // score 90 → Urgent
+    expect(linearCalls[0].labels).toContain("evolve");
+    expect(linearCalls[0].description).toContain("Move to push-based delivery via SSE.");
+    expect(linearCalls[0].description).toContain("daemon.jsonl");
+    expect(linearCalls[0].description).toContain("services/friday/src/comms/mail-poller.ts");
+
+    // Mail sent to orchestrator with verbose body
+    expect(bdCalls).toHaveLength(1);
+    expect(bdCalls[0][0]).toBe("create");
+    const labels = bdCalls[0][bdCalls[0].indexOf("-l") + 1];
     expect(labels).toContain("from:evolve:orchestrator");
-    expect(labels).toContain("delivery:pending");
-    const mailBody = calls[1][calls[1].indexOf("-d") + 1];
-    expect(mailBody).toContain("friday-42");
-    expect(mailBody).toContain(p.id);
+    const mailBody = bdCalls[0][bdCalls[0].indexOf("-d") + 1];
+    expect(mailBody).toContain("FRI-99");
+    expect(mailBody).toContain("Promote to Todo?");
 
     const reloaded = getProposal(p.id);
     expect(reloaded?.status).toBe("applied");
-    expect(reloaded?.appliedBy).toBe("orchestrator");
-    expect(reloaded?.appliedAt).toBeTruthy();
   });
 
-  it("returns ok=false when bd dispatch throws, leaving the proposal unapplied", () => {
+  it("files a low-signal code proposal silently in Linear (no mail)", async () => {
+    const p = saveProposal({
+      title: "Tiny tweak",
+      type: "code",
+      proposedChange: "Rename x to y.",
+      signals: [baseSignal],
+      blastRadius: "low",
+      appliesTo: ["foo.ts"],
+      createdBy: "cli",
+      score: 50, // below threshold (80) and not critical
+    });
+
+    const linearCalls: any[] = [];
+    const createLinearTicket = async (input: any) => {
+      linearCalls.push(input);
+      return { identifier: "FRI-100", url: "https://linear.app/voltz-makes/issue/FRI-100" };
+    };
+    const bdCalls: string[][] = [];
+    const runBd = (args: string[]): string => {
+      bdCalls.push(args);
+      return "friday-noop";
+    };
+
+    const outcome = await applyProposal(p.id, {
+      appliedBy: "orchestrator",
+      createLinearTicket,
+      runBd,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.ticketId).toBe("FRI-100");
+    expect(outcome.restartHint).toMatch(/silently|triage/i);
+
+    expect(linearCalls).toHaveLength(1);
+    expect(linearCalls[0].priority).toBe(3); // score 50 → Normal
+    // No bd mail call — low signal stays silent
+    expect(bdCalls).toHaveLength(0);
+  });
+
+  it("returns ok=false when Linear dispatch throws, leaving the proposal unapplied", async () => {
     const p = saveProposal({
       title: "Refactor mail poller",
       type: "code",
@@ -136,22 +183,25 @@ describe("applyProposal", () => {
       createdBy: "cli",
     });
 
-    const runBd = (): string => {
-      throw new Error("bd: command not found");
+    const createLinearTicket = async (): Promise<never> => {
+      throw new Error("Linear API: 401 Unauthorized");
     };
 
-    const outcome = applyProposal(p.id, { appliedBy: "orchestrator", runBd });
+    const outcome = await applyProposal(p.id, {
+      appliedBy: "orchestrator",
+      createLinearTicket,
+    });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.reason).toMatch(/code dispatch failed/);
-    expect(outcome.reason).toMatch(/bd: command not found/);
+    expect(outcome.reason).toMatch(/Linear API: 401/);
 
     const reloaded = getProposal(p.id);
     expect(reloaded?.status).toBe("open");
     expect(reloaded?.appliedAt).toBeNull();
   });
 
-  it("refuses to re-apply a proposal already applied", () => {
+  it("refuses to re-apply a proposal already applied", async () => {
     const p = saveProposal({
       title: "x",
       type: "memory",
@@ -161,21 +211,21 @@ describe("applyProposal", () => {
       appliesTo: [],
       createdBy: "cli",
     });
-    const first = applyProposal(p.id, { appliedBy: "cli" });
+    const first = await applyProposal(p.id, { appliedBy: "cli" });
     expect(first.ok).toBe(true);
 
-    const second = applyProposal(p.id, { appliedBy: "cli" });
+    const second = await applyProposal(p.id, { appliedBy: "cli" });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.reason).toMatch(/already applied/);
   });
 
-  it("returns not-found for unknown id", () => {
-    const outcome = applyProposal("nope", { appliedBy: "cli" });
+  it("returns not-found for unknown id", async () => {
+    const outcome = await applyProposal("nope", { appliedBy: "cli" });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.reason).toMatch(/not found/);
   });
 
-  it("applies a prompt-type proposal by writing config.json agent.systemPrompt", () => {
+  it("applies a prompt-type proposal by writing config.json agent.systemPrompt", async () => {
     writeFileSync(
       configPath,
       JSON.stringify({ agent: { model: "claude-sonnet-4-6" } }, null, 2)
@@ -191,7 +241,7 @@ describe("applyProposal", () => {
       createdBy: "scheduled-meta-daily",
     });
 
-    const outcome = applyProposal(p.id, { appliedBy: "dashboard" });
+    const outcome = await applyProposal(p.id, { appliedBy: "dashboard" });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.restartHint).toMatch(/restart/i);
@@ -202,7 +252,7 @@ describe("applyProposal", () => {
     expect(written.agent.model).toBe("claude-sonnet-4-6");
   });
 
-  it("applies a config-type proposal by deep-merging the JSON body", () => {
+  it("applies a config-type proposal by deep-merging the JSON body", async () => {
     writeFileSync(
       configPath,
       JSON.stringify(
@@ -222,7 +272,7 @@ describe("applyProposal", () => {
       createdBy: "scheduled-meta-daily",
     });
 
-    const outcome = applyProposal(p.id, { appliedBy: "dashboard" });
+    const outcome = await applyProposal(p.id, { appliedBy: "dashboard" });
     expect(outcome.ok).toBe(true);
 
     const written = JSON.parse(readFileSync(configPath, "utf-8"));
@@ -231,7 +281,7 @@ describe("applyProposal", () => {
     expect(written.agent.model).toBe("x"); // unrelated section preserved
   });
 
-  it("blocks prompt proposals targeting a meta-agent (self-modification guard)", () => {
+  it("blocks prompt proposals targeting a meta-agent (self-modification guard)", async () => {
     const p = saveProposal({
       title: "Rewrite scheduled-meta-daily prompt",
       type: "prompt",
@@ -242,12 +292,12 @@ describe("applyProposal", () => {
       createdBy: "scheduled-meta-daily",
     });
 
-    const outcome = applyProposal(p.id, { appliedBy: "dashboard" });
+    const outcome = await applyProposal(p.id, { appliedBy: "dashboard" });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.reason).toMatch(/self-modification/);
   });
 
-  it("rejects malformed config JSON without writing", () => {
+  it("rejects malformed config JSON without writing", async () => {
     writeFileSync(configPath, JSON.stringify({ agent: { model: "x" } }, null, 2));
 
     const p = saveProposal({
@@ -260,7 +310,7 @@ describe("applyProposal", () => {
       createdBy: "cli",
     });
 
-    const outcome = applyProposal(p.id, { appliedBy: "dashboard" });
+    const outcome = await applyProposal(p.id, { appliedBy: "dashboard" });
     expect(outcome.ok).toBe(false);
 
     const written = JSON.parse(readFileSync(configPath, "utf-8"));

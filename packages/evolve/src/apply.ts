@@ -9,8 +9,10 @@ export type ApplyOutcome =
       proposal: Proposal;
       appliedRef: string;
       restartHint?: string;
-      /** Phase 5: set when a code proposal seeds a Beads epic. */
-      epicId?: string;
+      /** Phase 5: set when a code proposal files a Linear ticket. */
+      ticketId?: string;
+      /** Phase 5: URL of the filed Linear ticket (for surfacing to the user). */
+      ticketUrl?: string;
     }
   | { ok: false; reason: string };
 
@@ -30,6 +32,11 @@ export interface ApplyOptions {
   runBd?: (args: string[]) => string;
   /** Override Beads workspace — used by tests. */
   beadsWorkspace?: string;
+  /**
+   * Inject a custom Linear ticket creator — used by tests so we don't hit
+   * the real Linear API.
+   */
+  createLinearTicket?: import("./dispatch.js").DispatchOptions["createLinearTicket"];
 }
 
 /**
@@ -44,7 +51,7 @@ export interface ApplyOptions {
  * Builder ourselves because Builder creation is high-blast-radius and always
  * goes through the user-approval flow the orchestrator already owns.
  */
-export function applyProposal(id: string, opts: ApplyOptions): ApplyOutcome {
+export async function applyProposal(id: string, opts: ApplyOptions): Promise<ApplyOutcome> {
   const proposal = getProposal(id);
   if (!proposal) return { ok: false, reason: `proposal not found: ${id}` };
   if (proposal.status === "applied") {
@@ -122,12 +129,13 @@ export function applyProposal(id: string, opts: ApplyOptions): ApplyOutcome {
   }
 
   if (proposal.type === "code") {
-    let dispatched: { epicId: string; mailId: string };
+    let dispatched: Awaited<ReturnType<typeof dispatchCodeProposal>>;
     try {
-      dispatched = dispatchCodeProposal(proposal, {
+      dispatched = await dispatchCodeProposal(proposal, {
         appliedBy: opts.appliedBy,
         runBd: opts.runBd,
         workspace: opts.beadsWorkspace,
+        createLinearTicket: opts.createLinearTicket,
       });
     } catch (err) {
       return {
@@ -135,13 +143,16 @@ export function applyProposal(id: string, opts: ApplyOptions): ApplyOutcome {
         reason: `code dispatch failed: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
-    const applied = markApplied(proposal, opts.appliedBy, `epic:${dispatched.epicId}`);
+    const applied = markApplied(proposal, opts.appliedBy, `linear:${dispatched.ticketId}`);
+    const restartHint = dispatched.mailId
+      ? `Mail ${dispatched.mailId} sent to orchestrator (high-signal proposal). ` +
+        `Confirm scope before the Builder is dispatched.`
+      : `Filed silently in Linear Backlog (low/medium signal). Triage via Linear when ready.`;
     return {
       ...applied,
-      epicId: dispatched.epicId,
-      restartHint:
-        `Mail ${dispatched.mailId} sent to orchestrator. ` +
-        `Confirm scope before the Builder is dispatched.`,
+      ticketId: dispatched.ticketId,
+      ticketUrl: dispatched.ticketUrl,
+      restartHint,
     };
   }
 

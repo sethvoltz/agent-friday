@@ -28,6 +28,8 @@ export interface BuilderEntry {
   status: AgentStatus;
   workspace: string;
   epicId: string | null;
+  /** Linear ticket identifier (e.g., "FRI-17") if this builder is bound to one */
+  linearTicket: string | null;
   createdAt: string;
   children: string[];
   /** Previous session IDs (most recent first), preserved on reset/recreate */

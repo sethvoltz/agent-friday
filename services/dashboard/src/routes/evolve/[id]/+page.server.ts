@@ -10,13 +10,14 @@ export function load({ params }: { params: { id: string } }): { proposal: Propos
 
 export const actions: Actions = {
   approve: async ({ params }) => {
-    const outcome = applyProposal(params.id!, { appliedBy: "dashboard" });
+    const outcome = await applyProposal(params.id!, { appliedBy: "dashboard" });
     if (!outcome.ok) {
       return fail(400, { ok: false, message: outcome.reason });
     }
     return {
       ok: true,
       message: `Applied — ${outcome.appliedRef}`,
+      ticketUrl: outcome.ticketUrl ?? null,
       restartHint: outcome.restartHint ?? null,
     };
   },

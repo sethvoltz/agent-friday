@@ -68,6 +68,8 @@ export interface CreateBuilderOptions {
   workingDirectory: string;
   repos: RepoSource[];
   epicId: string | null;
+  /** Linear ticket identifier (e.g., "FRI-17") if this builder is bound to one. */
+  linearTicket?: string | null;
   model: string;
   allowedTools?: string[];
 }
@@ -102,12 +104,13 @@ export async function createBuilder(
     workingDirectory,
     repos,
     epicId,
+    linearTicket = null,
     model,
     allowedTools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Agent"],
   } = options;
 
   const workspaceInfo = createWorkspace({ builderName: name, workingDirectory, repos });
-  registerBuilder(name, "orchestrator", workspaceInfo.path, epicId);
+  registerBuilder(name, "orchestrator", workspaceInfo.path, epicId, linearTicket);
 
   const spawnOptions: WorkerSpawnOptions = {
     agentName: name,

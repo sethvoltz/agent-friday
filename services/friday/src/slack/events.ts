@@ -45,6 +45,8 @@ import { createMemoryTools } from "../memory/memory-tools.js";
 import { buildMemoryContext } from "../memory/auto-recall.js";
 import { createScheduleTools } from "../scheduler/schedule-tools.js";
 import { createEvolveTools } from "../evolve/evolve-tools.js";
+import { buildLinearMcpServer } from "../linear/mcp.js";
+import { LINEAR_MCP_NAME } from "../linear/constants.js";
 import { logFeedback } from "./feedback.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
@@ -129,6 +131,10 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           "workspace" in entry ? `  ·  \`${entry.workspace}\`` : "";
         const parent =
           "parent" in entry ? `  ·  _parent: ${entry.parent}_` : "";
+        const linearTicket =
+          "linearTicket" in entry && entry.linearTicket
+            ? `  ·  Linear: \`${entry.linearTicket}\``
+            : "";
 
         // Last-activity label
         const stall = getAgentStallState(name);
@@ -146,7 +152,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         const stallIndicator = isStalled ? "  :warning: *stall*" : "";
 
         const status = entry.status === "active" ? ":large_green_circle:" : ":white_circle:";
-        return `${status} ${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}${activityStr}${stallIndicator}`;
+        return `${status} ${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}${linearTicket}${activityStr}${stallIndicator}`;
       });
 
       await client.chat.postEphemeral({
@@ -565,21 +571,25 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           model: config.agent.model,
           thinkingIndicatorDelaySec:
             config.slack_formatting.thinkingIndicatorDelaySec,
-          mcpServers: isOrchestrator
-            ? {
-                "friday-slack": slackMcp,
-                "friday-agents": agentMcp,
-                "friday-mail": createMailTools({ callerName: "orchestrator" }),
-                "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
-                "friday-scheduler": createScheduleTools({
-                  model: config.agent.model,
-                  defaultCwd: config.agent.workingDirectory,
-                }),
-                "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
-              }
-            : {
-                "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),
-              },
+          mcpServers: (() => {
+            const linear = buildLinearMcpServer();
+            const baseOrch = {
+              "friday-slack": slackMcp,
+              "friday-agents": agentMcp,
+              "friday-mail": createMailTools({ callerName: "orchestrator" }),
+              "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
+              "friday-scheduler": createScheduleTools({
+                model: config.agent.model,
+                defaultCwd: config.agent.workingDirectory,
+              }),
+              "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
+            };
+            const baseBare = {
+              "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),
+            };
+            const base = isOrchestrator ? baseOrch : baseBare;
+            return linear ? { ...base, [LINEAR_MCP_NAME]: linear } : base;
+          })(),
           systemPrompt: buildSystemPrompt(
             config,
             sessionType,

@@ -110,7 +110,35 @@ From the repo root, run the interactive setup. It creates `~/.friday/`, prompts 
 
 Pass `--yes` to skip prompts and accept current/default values. Setup ends by running `friday doctor` so you can confirm everything is wired up.
 
-## 5. Shell Completion (Optional)
+The Linear integration is offered during setup and can be configured (or rotated) any time after with:
+
+```bash
+friday setup linear
+```
+
+## 5. Linear Integration (Optional)
+
+Friday can read and write Linear tickets — query backlog status, claim tickets and spawn builders against them, and route `friday evolve` proposals into a Linear team's Backlog. See [ADR-026](decisions.md) for the design.
+
+**Generate a personal API key:**
+
+1. Visit [linear.app/settings/api](https://linear.app/settings/api).
+2. Click **Create new key**, name it something like `friday-daemon`.
+3. Copy the value (starts with `lin_api_…`) — you only see it once.
+
+**Wire it into Friday:**
+
+```bash
+friday setup linear
+```
+
+This prompts for the key, validates it against Linear's GraphQL viewer endpoint, and writes `LINEAR_API_KEY=…` to `~/.friday/.env`. Restart the daemon (`friday restart daemon`) for agents to pick up the new MCP.
+
+If the key is unset, the daemon starts normally and Linear features soft-degrade — agents are told to ask the user to run `friday setup linear` if they're asked about Linear tickets.
+
+**Pin the team:** the Friday Linear team ID is hardcoded in `@friday/shared/src/linear.ts`. If you're forking Friday for your own workspace, update `FRIDAY_TEAM_ID` (find your team ID via `linear_getTeams` from any agent session, or the Linear web UI under Team Settings → API).
+
+## 6. Shell Completion (Optional)
 
 Friday ships static completion scripts for zsh and bash. They list subcommands from a hand-maintained manifest, so tab completion never triggers heavy lazy imports.
 

@@ -1,5 +1,44 @@
 import type { AgentType } from "@friday/shared";
 import { BEADS_DIR } from "@friday/shared";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ── Built-in protocol bootstrap files ─────────────────────────────────────
+//
+// Built-in protocols ship with the daemon and are loaded once at module
+// load. User-side overrides (per FRI-21, future work) will live in
+// ~/.friday/prompts/protocols/ and shadow these.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROTOCOLS_DIR = resolve(__dirname, "prompts", "protocols");
+
+const linearOrchestratorProtocol = readFileSync(
+  resolve(PROTOCOLS_DIR, "linear.md"),
+  "utf-8"
+);
+const linearBuilderProtocol = readFileSync(
+  resolve(PROTOCOLS_DIR, "linear-builder.md"),
+  "utf-8"
+);
+
+const LINEAR_DEGRADED_NOTICE = `## Linear (unavailable)
+
+Linear is not configured (no \`LINEAR_API_KEY\`). If the user asks about Linear tickets, status, backlog, or wants to claim one, tell them to run:
+
+    friday setup linear
+
+Don't fabricate ticket data from memory or beads.`;
+
+function linearProtocolForRole(agentType: AgentType): string | null {
+  if (!process.env.LINEAR_API_KEY) {
+    // Only the orchestrator needs the degraded notice — builders/helpers
+    // simply won't see Linear tools and don't need to apologise about it.
+    return agentType === "orchestrator" ? LINEAR_DEGRADED_NOTICE : null;
+  }
+  if (agentType === "orchestrator") return linearOrchestratorProtocol;
+  if (agentType === "builder" || agentType === "helper") return linearBuilderProtocol;
+  return null;
+}
 
 export interface PrimeContext {
   agentName: string;
@@ -27,16 +66,20 @@ export interface PrimeContext {
  * This is appended to the Claude Code preset via the SDK's systemPrompt option.
  */
 export function buildAgentSystemPrompt(ctx: PrimeContext): string {
-  switch (ctx.agentType) {
-    case "orchestrator":
-      return buildOrchestratorSystemPrompt(ctx);
-    case "builder":
-      return buildBuilderSystemPrompt(ctx);
-    case "helper":
-      return buildHelperSystemPrompt(ctx);
-    case "scheduled":
-      return buildScheduledSystemPrompt(ctx);
-  }
+  const base = (() => {
+    switch (ctx.agentType) {
+      case "orchestrator":
+        return buildOrchestratorSystemPrompt(ctx);
+      case "builder":
+        return buildBuilderSystemPrompt(ctx);
+      case "helper":
+        return buildHelperSystemPrompt(ctx);
+      case "scheduled":
+        return buildScheduledSystemPrompt(ctx);
+    }
+  })();
+  const linear = linearProtocolForRole(ctx.agentType);
+  return linear ? `${base}\n\n${linear}` : base;
 }
 
 /**

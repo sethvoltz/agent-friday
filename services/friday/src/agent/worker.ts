@@ -11,6 +11,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
 import { createMailTools } from "../comms/mail-tools.js";
 import { mailCheck, mailEvents, buildMailPrompt } from "../comms/mail.js";
+import { buildLinearMcpServer } from "../linear/mcp.js";
+import { LINEAR_MCP_NAME } from "../linear/constants.js";
 import { createAgentTools } from "./agent-tools.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
@@ -122,6 +124,10 @@ async function runAgentLoop(
     "friday-mail": mailMcp,
     "friday-agents": agentMcp,
   };
+  const linearMcp = buildLinearMcpServer();
+  if (linearMcp) {
+    allMcpServers[LINEAR_MCP_NAME] = linearMcp;
+  }
 
   const queryOptions: Record<string, any> = {
     allowedTools,

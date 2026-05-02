@@ -95,7 +95,8 @@ export function registerBuilder(
   name: string,
   parent: string,
   workspace: string,
-  epicId: string | null
+  epicId: string | null,
+  linearTicket: string | null = null
 ): BuilderEntry {
   if (!isValidAgentName(name)) {
     throw new Error(`Invalid agent name: "${name}"`);
@@ -122,6 +123,7 @@ export function registerBuilder(
     status: "active",
     workspace,
     epicId,
+    linearTicket,
     createdAt: new Date().toISOString(),
     children: [],
   };

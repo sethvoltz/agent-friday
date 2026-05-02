@@ -136,6 +136,89 @@ describe("createAgentTools", () => {
       expect(result.content[0].text).toContain("require at least one repo");
     });
 
+    it("rejects a second builder for the same Linear ticket (double-spawn guard)", async () => {
+      vi.mocked(listAgents).mockReturnValue([
+        {
+          name: "builder-existing",
+          entry: {
+            type: "builder",
+            parent: "orchestrator",
+            sessionId: "s1",
+            status: "active",
+            workspace: "/tmp/ws/builder-existing",
+            epicId: "friday-100",
+            linearTicket: "FRI-17",
+            createdAt: new Date().toISOString(),
+            children: [],
+          },
+        },
+      ]);
+      createAgentTools(orchestratorCtx());
+      const result = await callTool("agent_create", {
+        type: "builder",
+        name: "builder-duplicate",
+        repos: [{ repo: "/tmp/repo" }],
+        epic_id: "friday-101",
+        linear_ticket: "FRI-17",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("builder-existing");
+      expect(result.content[0].text).toContain("FRI-17");
+      expect(createBuilder).not.toHaveBeenCalled();
+    });
+
+    it("rejects a second builder for the same Beads epic (double-spawn guard)", async () => {
+      vi.mocked(listAgents).mockReturnValue([
+        {
+          name: "builder-other",
+          entry: {
+            type: "builder",
+            parent: "orchestrator",
+            sessionId: "s2",
+            status: "active",
+            workspace: "/tmp/ws/builder-other",
+            epicId: "friday-200",
+            linearTicket: null,
+            createdAt: new Date().toISOString(),
+            children: [],
+          },
+        },
+      ]);
+      createAgentTools(orchestratorCtx());
+      const result = await callTool("agent_create", {
+        type: "builder",
+        name: "builder-collision",
+        repos: [{ repo: "/tmp/repo" }],
+        epic_id: "friday-200",
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("friday-200");
+      expect(createBuilder).not.toHaveBeenCalled();
+    });
+
+    it("passes linear_ticket through to createBuilder", async () => {
+      vi.mocked(listAgents).mockReturnValue([]);
+      createAgentTools(orchestratorCtx());
+      const result = await callTool("agent_create", {
+        type: "builder",
+        name: "builder-linear",
+        repos: [{ repo: "/tmp/repo" }],
+        epic_id: "friday-300",
+        linear_ticket: "FRI-46",
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(createBuilder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "builder-linear",
+          epicId: "friday-300",
+          linearTicket: "FRI-46",
+        })
+      );
+    });
+
     it("orchestrator can create a helper", async () => {
       vi.mocked(getAgent).mockReturnValue(undefined);
       createAgentTools(orchestratorCtx());
@@ -165,6 +248,7 @@ describe("createAgentTools", () => {
         status: "active",
         workspace: "/tmp/ws/builder-auth",
         epicId: null,
+        linearTicket: null,
         createdAt: new Date().toISOString(),
         children: [],
       });

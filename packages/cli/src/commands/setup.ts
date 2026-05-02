@@ -28,6 +28,18 @@ export const setupCommandCitty = defineCommand({
       default: false,
     },
   },
+  subCommands: {
+    linear: defineCommand({
+      meta: {
+        name: "linear",
+        description:
+          "Configure Linear integration (write LINEAR_API_KEY to ~/.friday/.env). Prompts for a personal API key, validates it against Linear's GraphQL viewer endpoint, and writes only that env var without touching other setup state.",
+      },
+      async run() {
+        await linearSetupCommand();
+      },
+    }),
+  },
   async run({ args }) {
     const argv: string[] = [];
     if (args.yes) argv.push("--yes");
@@ -102,6 +114,41 @@ async function confirm(question: string, defaultYes = true): Promise<boolean> {
   return value === true;
 }
 
+/**
+ * Ping Linear's GraphQL viewer endpoint to confirm a personal API key works.
+ * Linear personal API keys are passed as the raw value of the Authorization
+ * header (no `Bearer` prefix).
+ */
+async function validateLinearKey(key: string): Promise<boolean> {
+  try {
+    const res = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: key,
+      },
+      body: JSON.stringify({ query: "{ viewer { id } }" }),
+    });
+    if (!res.ok) return false;
+    const json = (await res.json()) as { data?: { viewer?: { id?: string } }; errors?: unknown };
+    return Boolean(json.data?.viewer?.id) && !json.errors;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read existing .env, replace or insert a single key, write back.
+ * Preserves order, comments, and surrounding lines.
+ */
+function upsertEnvVar(name: string, value: string): void {
+  const existingLines = existsSync(ENV_PATH)
+    ? readFileSync(ENV_PATH, "utf-8").split("\n")
+    : [];
+  const filtered = existingLines.filter((l) => l.trim() && !l.startsWith(`${name}=`));
+  writeFileSync(ENV_PATH, [`${name}=${value}`, ...filtered].join("\n") + "\n", "utf-8");
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 export async function setupCommand(args: string[]): Promise<void> {
@@ -161,18 +208,33 @@ export async function setupCommand(args: string[]): Promise<void> {
     }
   }
 
+  // ── Linear (optional) ───────────────────────────────────────────────
+  console.log();
+  console.log(`  ${dim("──")} ${dim("Linear (optional)")} ${dim("─".repeat(30))}`);
+
+  let linearKey = existingEnv.LINEAR_API_KEY ?? "";
+  if (nonInteractive) {
+    if (linearKey) console.log(`     ${OK} LINEAR_API_KEY  ${dim(maskSecret(linearKey))}`);
+    else console.log(`     ${dim("○")} LINEAR_API_KEY  not set (Linear features disabled)`);
+  } else {
+    linearKey = await promptForLinearKey(linearKey);
+  }
+
   // Write .env (preserve any extra vars the user may have added)
   const existingLines = existsSync(ENV_PATH)
     ? readFileSync(ENV_PATH, "utf-8").split("\n")
     : [];
   const preserved = existingLines.filter(
-    (l) => l.trim() && !l.startsWith("SLACK_APP_TOKEN=") && !l.startsWith("SLACK_BOT_TOKEN="),
+    (l) =>
+      l.trim() &&
+      !l.startsWith("SLACK_APP_TOKEN=") &&
+      !l.startsWith("SLACK_BOT_TOKEN=") &&
+      !l.startsWith("LINEAR_API_KEY="),
   );
-  writeFileSync(
-    ENV_PATH,
-    [`SLACK_APP_TOKEN=${slackAppToken}`, `SLACK_BOT_TOKEN=${slackBotToken}`, ...preserved].join("\n") + "\n",
-    "utf-8",
-  );
+  const envLines = [`SLACK_APP_TOKEN=${slackAppToken}`, `SLACK_BOT_TOKEN=${slackBotToken}`];
+  if (linearKey) envLines.push(`LINEAR_API_KEY=${linearKey}`);
+  envLines.push(...preserved);
+  writeFileSync(ENV_PATH, envLines.join("\n") + "\n", "utf-8");
 
   // ── Configuration ───────────────────────────────────────────────────
   console.log();
@@ -247,4 +309,54 @@ export async function setupCommand(args: string[]): Promise<void> {
   // ── Doctor ──────────────────────────────────────────────────────────
   const results = await runChecks();
   printResults(results);
+}
+
+/**
+ * Interactive prompt for the Linear personal API key. Returns the key (or
+ * empty string if user opts out). Validates against Linear's GraphQL viewer
+ * endpoint when a new key is provided.
+ */
+async function promptForLinearKey(current: string): Promise<string> {
+  if (current) {
+    const keep = await confirm(`LINEAR_API_KEY is set (${maskSecret(current)}) — keep?`);
+    if (keep) return current;
+    const replacement = await ask("New LINEAR_API_KEY", undefined, { secret: true });
+    if (!replacement) return current;
+    const ok = await validateLinearKey(replacement);
+    if (!ok) console.log(`     ${WARN} Key validation failed — saved anyway, fix later`);
+    else console.log(`     ${OK} Validated against Linear GraphQL viewer`);
+    return replacement;
+  }
+  const wantLinear = await confirm("Configure Linear integration?", false);
+  if (!wantLinear) return "";
+  console.log(dim("     Generate a personal API key at: https://linear.app/settings/api"));
+  const key = await ask("LINEAR_API_KEY", undefined, { secret: true, required: true });
+  const ok = await validateLinearKey(key);
+  if (!ok) console.log(`     ${WARN} Key validation failed — saved anyway, fix later`);
+  else console.log(`     ${OK} Validated against Linear GraphQL viewer`);
+  return key;
+}
+
+/**
+ * `friday setup linear` — re-run only the Linear section without touching the
+ * rest of the install. Convenient for rotating keys or enabling Linear after
+ * an initial Linear-less install.
+ */
+export async function linearSetupCommand(): Promise<void> {
+  console.log(BANNER);
+  console.log(`  ${bold("Friday Setup — Linear")}`);
+  console.log();
+  if (!process.stdin.isTTY) {
+    console.log(`  ${WARN} Non-interactive shell; aborting (run interactively to set the key)`);
+    process.exit(1);
+  }
+  const existingEnv = parseEnvFile(ENV_PATH);
+  const current = existingEnv.LINEAR_API_KEY ?? "";
+  const newKey = await promptForLinearKey(current);
+  if (newKey) {
+    upsertEnvVar("LINEAR_API_KEY", newKey);
+    console.log(`     ${OK} ${ENV_PATH}`);
+  } else {
+    console.log(`     ${dim("○")} No key set — Linear features remain disabled`);
+  }
 }

@@ -190,6 +190,7 @@ describe("createBuilder — process spawn", () => {
       "builder-registered",
       "orchestrator",
       "/tmp/test-workspace",
+      null,
       null
     );
   });

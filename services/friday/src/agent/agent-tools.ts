@@ -74,6 +74,15 @@ export function createAgentTools(ctx: AgentToolsContext) {
             .nullable()
             .optional()
             .describe("Beads epic ID for Builders (e.g., 'bd-a1b2'). Null if no epic assigned yet."),
+          linear_ticket: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "Linear ticket identifier this Builder is bound to (e.g., 'FRI-17'). " +
+              "Set when the Beads epic is a shim mirroring a Linear ticket — see the Linear protocol for the claim flow. " +
+              "The Builder will fetch full ticket detail from Linear; the Beads epic only needs a 1–2 line summary."
+            ),
           task_id: z
             .string()
             .nullable()
@@ -103,6 +112,29 @@ export function createAgentTools(ctx: AgentToolsContext) {
                 return errorResult("Builders require at least one repo.");
               }
 
+              // Double-spawn guard: refuse to create a second active Builder for
+              // the same Linear ticket or Beads epic. Either identifier is enough
+              // to identify a duplicate.
+              if (args.epic_id || args.linear_ticket) {
+                const collision = listAgents({ type: "builder", status: "active" }).find(
+                  ({ entry }) => {
+                    if (entry.type !== "builder") return false;
+                    if (args.epic_id && entry.epicId === args.epic_id) return true;
+                    if (args.linear_ticket && entry.linearTicket === args.linear_ticket) return true;
+                    return false;
+                  }
+                );
+                if (collision) {
+                  const what = args.linear_ticket
+                    ? `Linear ticket ${args.linear_ticket}`
+                    : `epic ${args.epic_id}`;
+                  return errorResult(
+                    `Builder "${collision.name}" is already active for ${what}. ` +
+                      `Mail or kill the existing builder before creating another.`
+                  );
+                }
+              }
+
               // MCP servers are reconstructed inside the worker process —
               // no need to pass them through the serialisation boundary.
               const result = await createBuilder({
@@ -110,6 +142,7 @@ export function createAgentTools(ctx: AgentToolsContext) {
                 workingDirectory: ctx.workingDirectory,
                 repos: args.repos,
                 epicId: args.epic_id ?? null,
+                linearTicket: args.linear_ticket ?? null,
                 model: ctx.model,
               });
 
@@ -117,7 +150,8 @@ export function createAgentTools(ctx: AgentToolsContext) {
               if (ctx.postToSlack) {
                 await ctx.postToSlack(
                   `\u{1F528} Builder *${args.name}* created and working in \`${result.workspace}\`` +
-                    (args.epic_id ? ` on epic \`${args.epic_id}\`` : "") +
+                    (args.linear_ticket ? ` on Linear \`${args.linear_ticket}\`` : "") +
+                    (!args.linear_ticket && args.epic_id ? ` on epic \`${args.epic_id}\`` : "") +
                     `. It will work independently — I'll check on it when asked.`
                 ).catch(() => {});
               }
@@ -125,8 +159,9 @@ export function createAgentTools(ctx: AgentToolsContext) {
               return okResult(
                 `Builder "${args.name}" created and running in background.\n` +
                   `Workspace: ${result.workspace}\n` +
-                  `Epic: ${args.epic_id ?? "none"}\n\n` +
-                  `A confirmation has been posted to Slack.\n` +
+                  `Epic: ${args.epic_id ?? "none"}\n` +
+                  (args.linear_ticket ? `Linear: ${args.linear_ticket}\n` : "") +
+                  `\nA confirmation has been posted to Slack.\n` +
                   `YOUR TURN IS DONE. Respond briefly and stop. Do NOT do the builder's work.`
               );
             }

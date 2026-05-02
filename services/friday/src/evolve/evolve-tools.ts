@@ -115,10 +115,13 @@ export function createEvolveTools(ctx: EvolveToolsContext) {
           id: z.string().describe("Proposal id"),
         },
         async ({ id }) => {
-          const outcome = applyProposal(id, { appliedBy: ctx.callerName });
+          const outcome = await applyProposal(id, { appliedBy: ctx.callerName });
           if (outcome.ok) {
+            const linearLine = outcome.ticketUrl
+              ? ` Linear: <${outcome.ticketUrl}|${outcome.ticketId}>.`
+              : "";
             return ok(
-              `Proposal ${id} applied. Materialized as ${outcome.appliedRef}. Status: ${outcome.proposal.status}.`
+              `Proposal ${id} applied. Materialized as ${outcome.appliedRef}. Status: ${outcome.proposal.status}.${linearLine}`
             );
           }
           // applyProposal returns ok:false both for "queued" (prompt/config/code) and hard errors.

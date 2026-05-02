@@ -26,6 +26,7 @@ import { drainScheduledRuns } from "./scheduler/trigger.js";
 import { createScheduleTools } from "./scheduler/schedule-tools.js";
 import { seedScheduledMetaAgents } from "./evolve/seed.js";
 import { createEvolveTools } from "./evolve/evolve-tools.js";
+import { reconcileLinearTickets } from "./linear/reconcile.js";
 
 async function main() {
   const startTime = Date.now();
@@ -199,6 +200,16 @@ async function main() {
 
   // Restore agents that were active before shutdown
   restoreActiveAgents(config.agent.model);
+
+  // Surface any Linear tickets stuck In Progress without a live builder
+  // (e.g. from a daemon crash mid-build). Posts to Slack; user decides
+  // whether to resume, mark blocked, or cancel. No-op if Linear isn't
+  // configured.
+  await reconcileLinearTickets({
+    postSlack: async (text) => {
+      await app.client.chat.postMessage({ channel: orchChannelId, text });
+    },
+  });
 
   // Idempotently seed the daily self-improvement analyst before the scheduler
   // starts checking — otherwise its nextRunAt won't be considered until the
