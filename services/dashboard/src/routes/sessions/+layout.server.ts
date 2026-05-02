@@ -2,14 +2,13 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadConfig,
-  AGENTS_PATH,
-  USAGE_LOG_PATH,
   SESSIONS_DIR,
   FRIDAY_DIR,
   getSessionDateRange,
-  type AgentRegistry,
+  getIndexedRanges,
+  getAllSessionAggregates,
+  getBareSessionAggregates,
   type RegistryEntry,
-  type UsageEntry,
 } from "@friday/shared";
 import type { LayoutServerLoad } from "./$types";
 
@@ -43,25 +42,11 @@ export interface BareSessionGroup {
   sessions: Array<{ sessionId: string; firstAt: string; lastAt: string; turns: number; active: boolean }>;
 }
 
-export const load: LayoutServerLoad = async () => {
+export const load: LayoutServerLoad = async ({ parent }) => {
   const config = loadConfig();
 
-  // Agent registry
-  let agents: AgentRegistry = {};
-  if (existsSync(AGENTS_PATH)) {
-    try {
-      agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
-    } catch { /* skip */ }
-  }
-
-  // Usage entries
-  const usageEntries: UsageEntry[] = [];
-  if (existsSync(USAGE_LOG_PATH)) {
-    const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-    for (const line of lines) {
-      try { usageEntries.push(JSON.parse(line)); } catch { /* skip */ }
-    }
-  }
+  // Agent registry — inherited from the root layout.
+  const { agents } = await parent();
 
   // Current channel sessions
   const channelsPath = join(SESSIONS_DIR, "channels.json");
@@ -79,17 +64,19 @@ export const load: LayoutServerLoad = async () => {
   // Slack name cache
   const slackNames = loadNamesCache();
 
-  // ── Usage stats by sessionId ────────────────────────────────
-  const usageBySession = new Map<string, { firstAt: string; lastAt: string; turns: number }>();
-  for (const e of usageEntries) {
-    const existing = usageBySession.get(e.sessionId);
-    if (existing) {
-      existing.turns++;
-      existing.lastAt = e.timestamp;
-    } else {
-      usageBySession.set(e.sessionId, { firstAt: e.timestamp, lastAt: e.timestamp, turns: 1 });
-    }
+  // ── Usage stats by sessionId — single GROUP BY query ────────
+  const usageBySession = getAllSessionAggregates();
+
+  // ── Transcript index: pre-fetch first/last timestamps for every
+  //    session that the registry knows about so the per-session
+  //    fallback (a partial-file read) is reserved for the rare case
+  //    of an unindexed session.
+  const allSessionIds: string[] = [];
+  for (const entry of Object.values(agents)) {
+    if (entry.sessionId) allSessionIds.push(entry.sessionId);
+    if (entry.formerSessionIds) allSessionIds.push(...entry.formerSessionIds);
   }
+  const indexedRanges = getIndexedRanges(allSessionIds);
 
   // ── Build agent tree ────────────────────────────────────────
   const orchChannelId = config.slack.orchestratorChannelId;
@@ -99,6 +86,7 @@ export const load: LayoutServerLoad = async () => {
     if (entry.type === "orchestrator") return config.agent.workingDirectory;
     if (entry.type === "builder") return entry.workspace;
     if (entry.type === "helper") return entry.cwd;
+    if (entry.type === "scheduled") return entry.cwd;
     return null;
   }
 
@@ -114,18 +102,20 @@ export const load: LayoutServerLoad = async () => {
     const formerSessions = formerIds
       .map((sid) => {
         const stats = usageBySession.get(sid);
-        // Fall back to reading dates from the transcript JSONL file
-        if (!stats && cwd) {
+        if (stats) return { sessionId: sid, ...stats };
+        const indexed = indexedRanges.get(sid);
+        if (indexed) return { sessionId: sid, ...indexed, turns: 0 };
+        // Last-resort partial-file read for sessions not yet indexed
+        // (the indexer runs every 5 min, so this is rare).
+        if (cwd) {
           const range = getSessionDateRange(sid, cwd);
           if (range) return { sessionId: sid, ...range, turns: 0 };
         }
-        return {
-          sessionId: sid,
-          firstAt: stats?.firstAt ?? "",
-          lastAt: stats?.lastAt ?? "",
-          turns: stats?.turns ?? 0,
-        };
+        return { sessionId: sid, firstAt: "", lastAt: "", turns: 0 };
       })
+      // Drop sessions with no resolvable data — stale IDs whose transcript
+      // and usage are gone show as blank rows otherwise.
+      .filter((s) => s.firstAt)
       .sort((a, b) => b.lastAt.localeCompare(a.lastAt));
 
     const children: AgentTreeNode[] = [];
@@ -145,17 +135,22 @@ export const load: LayoutServerLoad = async () => {
       }
     }
 
-    // Start date: from usage stats, transcript file, or createdAt
+    // Start date: from usage stats, transcript index, partial-file read, or createdAt
     let currentSessionStart: string | null = null;
     if (currentSessionId) {
       const stats = usageBySession.get(currentSessionId);
       if (stats) {
         currentSessionStart = stats.firstAt;
-      } else if (cwd) {
-        const range = getSessionDateRange(currentSessionId, cwd);
-        currentSessionStart = range?.firstAt ?? entry.createdAt ?? null;
       } else {
-        currentSessionStart = entry.createdAt ?? null;
+        const indexed = indexedRanges.get(currentSessionId);
+        if (indexed) {
+          currentSessionStart = indexed.firstAt;
+        } else if (cwd) {
+          const range = getSessionDateRange(currentSessionId, cwd);
+          currentSessionStart = range?.firstAt ?? entry.createdAt ?? null;
+        } else {
+          currentSessionStart = entry.createdAt ?? null;
+        }
       }
     } else {
       currentSessionStart = entry.createdAt ?? null;
@@ -181,20 +176,16 @@ export const load: LayoutServerLoad = async () => {
     }
   }
 
-  // ── Build bare session groups ───────────────────────────────
+  // ── Build bare session groups (single GROUP BY query) ───────
   const bareByChannel = new Map<string, Map<string, { firstAt: string; lastAt: string; turns: number }>>();
-  for (const e of usageEntries) {
-    if (e.sessionType === "bare" && e.channelId) {
-      if (!bareByChannel.has(e.channelId)) bareByChannel.set(e.channelId, new Map());
-      const sessions = bareByChannel.get(e.channelId)!;
-      const existing = sessions.get(e.sessionId);
-      if (existing) {
-        existing.turns++;
-        existing.lastAt = e.timestamp;
-      } else {
-        sessions.set(e.sessionId, { firstAt: e.timestamp, lastAt: e.timestamp, turns: 1 });
-      }
-    }
+  for (const r of getBareSessionAggregates()) {
+    if (!r.channelId) continue;
+    if (!bareByChannel.has(r.channelId)) bareByChannel.set(r.channelId, new Map());
+    bareByChannel.get(r.channelId)!.set(r.sessionId, {
+      firstAt: r.firstAt,
+      lastAt: r.lastAt,
+      turns: r.turns,
+    });
   }
 
   // Also add channel-history entries that may not be in usage (pre-logging resets)

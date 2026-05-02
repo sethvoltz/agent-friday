@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { SESSIONS_DIR } from "@friday/shared";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { SESSIONS_DIR, atomicWriteFileSync } from "@friday/shared";
 import { join } from "node:path";
 import { log } from "../log.js";
 
@@ -33,11 +33,11 @@ export function loadSessions(): void {
 }
 
 function saveSessions(): void {
-  writeFileSync(CHANNELS_FILE, JSON.stringify(sessions, null, 2));
+  atomicWriteFileSync(CHANNELS_FILE, JSON.stringify(sessions, null, 2));
 }
 
 function saveHistory(): void {
-  writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  atomicWriteFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
 }
 
 export function getSessionId(channelId: string): string | undefined {

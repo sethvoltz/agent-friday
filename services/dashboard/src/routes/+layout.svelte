@@ -26,8 +26,9 @@
   const connection = $derived(getConnection());
 
   // Live uptime ticker
-  let uptimeMs = $state(data.health ? Date.now() - new Date(data.health.startedAt).getTime() : 0);
+  let uptimeMs = $state(0);
   onMount(() => {
+    if (data.health) uptimeMs = Date.now() - new Date(data.health.startedAt).getTime();
     const interval = setInterval(() => {
       if (data.health) {
         uptimeMs = Date.now() - new Date(data.health.startedAt).getTime();
@@ -91,6 +92,9 @@
       <nav class="header-nav">
         <a href="/" class:active={$page.url.pathname === '/'}>Dashboard</a>
         <a href="/sessions" class:active={$page.url.pathname.startsWith('/sessions')}>Sessions</a>
+        <a href="/schedules" class:active={$page.url.pathname.startsWith('/schedules')}>Schedules</a>
+        <a href="/memory" class:active={$page.url.pathname.startsWith('/memory')}>Memory</a>
+        <a href="/evolve" class:active={$page.url.pathname.startsWith('/evolve')}>Evolve</a>
       </nav>
       <button class="theme-toggle" onclick={toggleTheme} title="Toggle theme">
         {theme === 'dark' ? '☀' : '☾'}

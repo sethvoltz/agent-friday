@@ -8,6 +8,8 @@ import { createMailTools } from "../comms/mail-tools.js";
 import { log } from "../log.js";
 import { resetSession, getSessionId } from "../sessions/manager.js";
 import { listAgents, getAgent } from "../sessions/registry.js";
+import { killAgentByName, getAgentStallState } from "../agent/lifecycle.js";
+import { getRecentlyTouchedFiles } from "../monitor/file-tracker.js";
 import { buildInspectResult, formatTurns } from "@friday/shared";
 import {
   getSessionStats,
@@ -23,17 +25,27 @@ import {
   removeQueued,
   swapToProcessing,
   clearProcessingEmoji,
+  addStatusReaction,
+  removeStatusReaction,
+  swapStatusReaction,
   type QueuedMessage,
 } from "../sessions/queue.js";
 import {
   buildSystemPrompt,
   chunkMessage,
-  buildBatchPrompt,
+  buildBatchContent,
   buildBlockquote,
   formatErrorResponse,
   buildSessionFields,
+  isInterruptSignal,
+  type MultimodalPrompt,
 } from "./helpers.js";
+import { fetchSlackImages } from "./image-fetch.js";
 import { createMemoryTools } from "../memory/memory-tools.js";
+import { buildMemoryContext } from "../memory/auto-recall.js";
+import { createScheduleTools } from "../scheduler/schedule-tools.js";
+import { createEvolveTools } from "../evolve/evolve-tools.js";
+import { logFeedback } from "./feedback.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -105,6 +117,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         return;
       }
 
+      const now = Date.now();
       const lines = agents.map(({ name, entry }) => {
         const typeLabel =
           entry.type === "orchestrator"
@@ -116,8 +129,24 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           "workspace" in entry ? `  ·  \`${entry.workspace}\`` : "";
         const parent =
           "parent" in entry ? `  ·  _parent: ${entry.parent}_` : "";
+
+        // Last-activity label
+        const stall = getAgentStallState(name);
+        const lastChunkAge = stall ? Math.round((now - stall.lastChunkAt) / 1000) : null;
+        const activityStr = lastChunkAge !== null ? `  ·  _${lastChunkAge}s ago_` : "";
+
+        // Stall indicator (only for active agents with stall state)
+        const STALL_THRESHOLD_DISPLAY = 30_000;
+        const isStalled =
+          stall !== null &&
+          entry.status === "active" &&
+          !stall.toolCallActive &&
+          !stall.waitingForMail &&
+          now - stall.lastChunkAt > STALL_THRESHOLD_DISPLAY;
+        const stallIndicator = isStalled ? "  :warning: *stall*" : "";
+
         const status = entry.status === "active" ? ":large_green_circle:" : ":white_circle:";
-        return `${status} ${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}`;
+        return `${status} ${typeLabel}  *${name}*  \`${entry.type}\`${parent}${workspace}${activityStr}${stallIndicator}`;
       });
 
       await client.chat.postEphemeral({
@@ -141,6 +170,54 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           },
         ],
       });
+    } else if (args.startsWith("kill")) {
+      const agentName = args.replace(/^kill\s*/, "").trim();
+      if (!agentName) {
+        await respond("Usage: `/friday kill <agent-name>`");
+        return;
+      }
+      if (agentName === "orchestrator") {
+        await respond(":no_entry:  Cannot kill the Orchestrator.");
+        return;
+      }
+      const killEntry = getAgent(agentName);
+      if (!killEntry) {
+        await respond(
+          `:x:  Agent \`${agentName}\` not found. Use \`/friday agents\` to see available agents.`
+        );
+        return;
+      }
+      try {
+        killAgentByName(agentName);
+
+        // Report recently touched files so the user knows what was in-flight
+        const touched = getRecentlyTouchedFiles(agentName, 1);
+        const touchedFiles =
+          touched.length > 0 && touched[0].files.length > 0
+            ? `\nFiles touched in the killed turn: ${touched[0].files.join(", ")}`
+            : "";
+
+        await client.chat.postEphemeral({
+          channel: channelId,
+          user: command.user_id,
+          text: `:skull:  Agent *${agentName}* killed. Workspace preserved.${touchedFiles}`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text:
+                  `:skull:  Agent *${agentName}* killed. Workspace preserved.` +
+                  (touchedFiles ? `\n${touchedFiles}` : ""),
+              },
+            },
+          ],
+        });
+      } catch (err) {
+        await respond(
+          `:x:  Failed to kill \`${agentName}\`: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     } else if (args === "session") {
       const sessionId = getSessionId(channelId);
       if (!sessionId) {
@@ -254,7 +331,8 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         "*Friday commands:*\n" +
           "• `/friday reset` — Clear session, start fresh\n" +
           "• `/friday session` — Show current session info\n" +
-          "• `/friday agents` — List active agents\n" +
+          "• `/friday agents` — List active agents (with stall indicators)\n" +
+          "• `/friday kill <agent>` — Force-kill a running agent (workspace preserved)\n" +
           "• `/friday inspect <agent>` — Inspect agent's recent transcript\n" +
           "• `/friday help` — Show this message"
       );
@@ -275,8 +353,19 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       const messageTs = changed.message?.ts;
       const newText = changed.message?.text;
 
-      if (messageTs && newText && updateQueued(channelId, messageTs, newText)) {
-        log("info", "queued_message_edited", { channelId, messageTs });
+      if (messageTs && newText) {
+        const previousText = changed.previous_message?.text;
+        if (updateQueued(channelId, messageTs, newText)) {
+          log("info", "queued_message_edited", { channelId, messageTs });
+        }
+        // Always log feedback — edits to already-processed messages are signal too.
+        logFeedback({
+          kind: "edited",
+          channelId,
+          messageTs,
+          previousText,
+          newText,
+        });
       }
     }
 
@@ -284,34 +373,54 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       const deleted = event as any;
       const channelId = deleted.channel;
       const messageTs = deleted.previous_message?.ts;
+      const previousText = deleted.previous_message?.text;
 
-      if (messageTs && removeQueued(channelId, messageTs)) {
-        // Remove the queued emoji from the deleted message
-        try {
-          await client.reactions.remove({
-            channel: channelId,
-            timestamp: messageTs,
-            name: emojis.queued,
-          });
-        } catch {
-          // Message already deleted, reaction gone
+      if (messageTs) {
+        if (removeQueued(channelId, messageTs)) {
+          // Remove the queued emoji from the deleted message
+          try {
+            await client.reactions.remove({
+              channel: channelId,
+              timestamp: messageTs,
+              name: emojis.queued,
+            });
+          } catch {
+            // Message already deleted, reaction gone
+          }
+          log("info", "queued_message_deleted", { channelId, messageTs });
         }
-        log("info", "queued_message_deleted", { channelId, messageTs });
+        logFeedback({
+          kind: "deleted",
+          channelId,
+          messageTs,
+          previousText,
+        });
       }
     }
   });
 
   app.message(async ({ message, client, say }) => {
-    // Ignore bot messages, message edits, etc.
-    if (message.subtype) return;
-    if (!("text" in message) || !message.text) return;
+    // Ignore bot messages, message edits, etc. — but allow file_share (image uploads)
+    if (message.subtype && message.subtype !== "file_share") return;
     if (!("user" in message)) return;
+
+    const rawMsg = message as any;
+    const hasFiles = Array.isArray(rawMsg.files) && rawMsg.files.length > 0;
+    const hasText = "text" in message && !!message.text;
+
+    // Drop messages with neither text nor files
+    if (!hasText && !hasFiles) return;
 
     const channelId = message.channel;
     const sessionType = channelId === orchestratorChannelId ? "orchestrator" as const : "bare" as const;
-    const text = message.text;
+    const text = hasText ? (message as any).text as string : "";
     const ts = message.ts;
-    const userId = message.user;
+    const userId = message.user as string;
+
+    // Fetch image attachments (non-image files and download failures are skipped)
+    const images = hasFiles
+      ? await fetchSlackImages(rawMsg.files, config.slackBotToken)
+      : undefined;
 
     const queuedMsg: QueuedMessage = {
       id: ts,
@@ -319,6 +428,8 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       text,
       userId,
       wasQueued: isProcessing(channelId),
+      images: images && images.length > 0 ? images : undefined,
+      interrupt: sessionType === "orchestrator" && isInterruptSignal(text),
     };
 
     if (queuedMsg.wasQueued) {
@@ -385,10 +496,25 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
         }
       }
 
-      // Combine batch into single prompt
-      const prompt = buildBatchPrompt(batch.map((m) => m.text));
+      // Combine batch into single prompt (multimodal when images present)
+      const rawPrompt = buildBatchContent(batch);
+
+      // Auto-recall: inject relevant memories into the prompt
+      const promptText = typeof rawPrompt === "string" ? rawPrompt : rawPrompt.text;
+      const memoryContext = buildMemoryContext(promptText);
+      let prompt: string | MultimodalPrompt;
+      if (memoryContext) {
+        if (typeof rawPrompt === "string") {
+          prompt = `${memoryContext}\n\n${rawPrompt}`;
+        } else {
+          prompt = { ...rawPrompt, text: `${memoryContext}\n\n${rawPrompt.text}` };
+        }
+      } else {
+        prompt = rawPrompt;
+      }
+
       const quoted = wasQueued
-        ? buildBlockquote(batch.map((m) => m.text))
+        ? buildBlockquote(batch.map((m) => m.text.trim() || "[image]"))
         : null;
 
       // For queued messages: post placeholder with blockquote echo + "Working..."
@@ -404,6 +530,13 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
 
       // Thinking indicator message — declared outside try so catch can clean up
       let thinkingMsgTs: string | null = null;
+      // Current tool reaction emoji on the last batch message
+      let currentToolEmoji: string | null = null;
+      // Every status emoji we've ever attempted to add — finally drains them all
+      // so a late callback can't leave a stuck reaction.
+      const statusEmojisAttempted = new Set<string>();
+      // Set true at the start of finally; further callbacks are no-ops after this.
+      let processingDone = false;
 
       try {
         const isOrchestrator = sessionType === "orchestrator";
@@ -438,6 +571,11 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 "friday-agents": agentMcp,
                 "friday-mail": createMailTools({ callerName: "orchestrator" }),
                 "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
+                "friday-scheduler": createScheduleTools({
+                  model: config.agent.model,
+                  defaultCwd: config.agent.workingDirectory,
+                }),
+                "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
               }
             : {
                 "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),
@@ -450,7 +588,24 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           ),
         };
 
+        // Capture for closures — TS loses the !null narrowing inside nested fns.
+        const batchMsgs = batch;
+
+        // Helpers that gate on processingDone and remember every emoji we attempt
+        // to add, so the finally cleanup can drain everything (including late
+        // callbacks) without leaving stuck reactions.
+        function trackedAdd(emoji: string): void {
+          if (processingDone || !emoji) return;
+          statusEmojisAttempted.add(emoji);
+          addStatusReaction(client, batchMsgs, emoji).catch(() => {});
+        }
+        function trackedRemove(emoji: string): void {
+          if (!emoji) return;
+          removeStatusReaction(client, batchMsgs, emoji).catch(() => {});
+        }
+
         // Thinking indicator — posted when agent takes too long, deleted on first content
+        // Also adds a 🤔 reaction on the last batch message alongside the text message.
         const thinkingCallbacks: AgentCallbacks = {
           onThinkingStart: (elapsedSec) => {
             client.chat
@@ -462,6 +617,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 thinkingMsgTs = res.ts ?? null;
               })
               .catch(() => {});
+            trackedAdd(emojis.thinking);
           },
           onThinkingTick: (elapsedSec) => {
             if (thinkingMsgTs) {
@@ -481,36 +637,49 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 .catch(() => {});
               thinkingMsgTs = null;
             }
+            trackedRemove(emojis.thinking);
           },
         };
 
-        // Compaction status message — posted on start, updated on end
-        let compactMsgTs: string | null = null;
+        // Tool use reactions — swap emoji on the last batch message as tools fire.
+        // MCP tools come through as `mcp__<server>__<tool>` and currently land in
+        // the generic bucket; a finer-grained mail/memory/scheduler split is a
+        // pending UX call (would need new EmojiConfig fields).
+        function toolEmojiFor(toolName: string): string {
+          const codingTools = new Set(["Read", "Write", "Edit", "Bash", "Glob", "Grep"]);
+          const webTools = new Set(["WebFetch", "WebSearch"]);
+          if (codingTools.has(toolName)) return emojis.toolCoding;
+          if (webTools.has(toolName) || toolName.toLowerCase().includes("browser")) return emojis.toolWeb;
+          return emojis.toolGeneric;
+        }
+
+        // Compaction — ✍ reaction on start; on end remove the reaction and, if
+        // the compaction failed, surface that explicitly so the user isn't left
+        // wondering why the next turn looks weird.
         const agentCallbacks: AgentCallbacks = {
           ...thinkingCallbacks,
+          onToolUse: (toolName) => {
+            if (processingDone) return;
+            const newEmoji = toolEmojiFor(toolName);
+            // No-op if the same bucket; spares the API a remove+add round-trip
+            // (e.g. five consecutive Reads = one add, not ten swaps).
+            if (newEmoji === currentToolEmoji) return;
+            const previous = currentToolEmoji;
+            currentToolEmoji = newEmoji;
+            statusEmojisAttempted.add(newEmoji);
+            swapStatusReaction(client, batchMsgs, previous, newEmoji).catch(() => {});
+          },
           onCompactStart: () => {
-            client.chat
-              .postMessage({
-                channel: channelId,
-                text: ":hourglass_flowing_sand: _Compacting conversation..._",
-              })
-              .then((res) => {
-                compactMsgTs = res.ts ?? null;
-              })
-              .catch(() => {});
+            trackedAdd(emojis.compacting);
           },
           onCompactEnd: (result) => {
-            const text =
-              result === "success"
-                ? ":clamp: _Conversation was compacted_"
-                : ":warning: _Compaction failed_";
-            if (compactMsgTs) {
+            trackedRemove(emojis.compacting);
+            if (result === "failed") {
               client.chat
-                .update({ channel: channelId, ts: compactMsgTs, text })
-                .catch(() => {});
-            } else {
-              client.chat
-                .postMessage({ channel: channelId, text })
+                .postMessage({
+                  channel: channelId,
+                  text: ":warning: _Compaction failed_",
+                })
                 .catch(() => {});
             }
           },
@@ -602,8 +771,15 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           // Ignore
         }
       } finally {
-        // Clear processing emoji from all batch messages
+        // Gate further callback adds — late tool_progress events shouldn't add
+        // reactions after we've started cleaning up.
+        processingDone = true;
         await clearProcessingEmoji(client, batch, emojis.processing);
+        // Remove every emoji we ever asked to add — covers the standard
+        // thinking/compacting paths plus any tool-bucket emojis swapped in.
+        for (const emoji of statusEmojisAttempted) {
+          await removeStatusReaction(client, batch, emoji).catch(() => {});
+        }
       }
 
       // Loop to check if more messages arrived while we were processing
@@ -611,7 +787,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   }
 
   async function processWithStreaming(
-    prompt: string,
+    prompt: string | MultimodalPrompt,
     quoted: string | null,
     channelId: string,
     agentOptions: Parameters<typeof sendToAgent>[1],

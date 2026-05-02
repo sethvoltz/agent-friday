@@ -6,7 +6,10 @@ import {
   buildBlockquote,
   formatErrorResponse,
   buildSessionFields,
+  buildBatchDisplayText,
+  buildBatchContent,
 } from "./helpers.js";
+import type { QueuedMessage } from "../sessions/queue.js";
 import type { RuntimeConfig } from "../config.js";
 
 // Minimal config factory for testing
@@ -221,6 +224,66 @@ describe("formatErrorResponse", () => {
   it("formats error with blockquote", () => {
     const result = formatErrorResponse("oops", "> original message");
     expect(result).toBe("> original message\n\n:radioactive_sign: _oops_");
+  });
+});
+
+function makeMsg(text: string, images?: QueuedMessage["images"]): QueuedMessage {
+  return { id: "ts", channelId: "C1", text, userId: "U1", images };
+}
+
+describe("buildBatchDisplayText", () => {
+  it("uses message text when present", () => {
+    expect(buildBatchDisplayText([makeMsg("hello")])).toBe("hello");
+  });
+
+  it("substitutes [image] for empty text", () => {
+    expect(buildBatchDisplayText([makeMsg("")])).toBe("[image]");
+  });
+
+  it("joins mixed batch with double newlines", () => {
+    expect(
+      buildBatchDisplayText([makeMsg("hi"), makeMsg("")])
+    ).toBe("hi\n\n[image]");
+  });
+});
+
+describe("buildBatchContent", () => {
+  it("returns plain string when no images in batch", () => {
+    const result = buildBatchContent([makeMsg("hello"), makeMsg("world")]);
+    expect(typeof result).toBe("string");
+    expect(result).toBe("hello\n\nworld");
+  });
+
+  it("returns MultimodalPrompt when any message has images", () => {
+    const img = { data: "abc123", mediaType: "image/png" };
+    const result = buildBatchContent([
+      makeMsg("look at this", [img]),
+      makeMsg("and this"),
+    ]);
+    expect(typeof result).toBe("object");
+    const mp = result as { text: string; images: typeof img[] };
+    expect(mp.text).toBe("look at this\n\nand this");
+    expect(mp.images).toEqual([img]);
+  });
+
+  it("collects images from all messages in batch order", () => {
+    const img1 = { data: "aaa", mediaType: "image/png" };
+    const img2 = { data: "bbb", mediaType: "image/jpeg" };
+    const result = buildBatchContent([
+      makeMsg("first", [img1]),
+      makeMsg("second", [img2]),
+    ]) as { text: string; images: typeof img1[] };
+    expect(result.images).toEqual([img1, img2]);
+  });
+
+  it("image-only message gets [image] placeholder in text", () => {
+    const img = { data: "x", mediaType: "image/png" };
+    const result = buildBatchContent([makeMsg("", [img])]) as {
+      text: string;
+      images: typeof img[];
+    };
+    expect(result.text).toBe("[image]");
+    expect(result.images).toEqual([img]);
   });
 });
 

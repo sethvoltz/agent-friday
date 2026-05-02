@@ -55,6 +55,12 @@ describe("buildAgentSystemPrompt", () => {
     const delegateIdx = prompt.indexOf("How to delegate");
     expect(isolationIdx).toBeLessThan(delegateIdx);
 
+    // Memory — auto-recall, reflexive saving, update tool
+    expect(prompt).toContain("automatically injected");
+    expect(prompt).toContain("memory-context");
+    expect(prompt).toContain("EVERY conversation turn");
+    expect(prompt).toContain("memory_update");
+
     // Turn discipline
     expect(prompt).toContain("End your turn");
 

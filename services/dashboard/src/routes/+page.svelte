@@ -17,12 +17,12 @@
   });
 
   // Compute usage stats
-  const entries = data.usageEntries;
+  const entries = $derived(data.usageEntries);
   const now = Date.now();
   const todayStart = new Date().setHours(0, 0, 0, 0);
   const weekStart = todayStart - 6 * 24 * 60 * 60 * 1000;
 
-  function sumEntries(list: typeof entries) {
+  function sumEntries(list: (typeof data.usageEntries)) {
     let cost = 0, inputRaw = 0, output = 0, cacheCreation = 0, cacheRead = 0, duration = 0;
     for (const e of list) {
       cost += e.costUsd ?? 0;
@@ -30,7 +30,7 @@
       output += e.outputTokens;
       cacheCreation += e.cacheCreationTokens;
       cacheRead += e.cacheReadTokens;
-      duration += e.durationMs;
+      duration += e.durationMs ?? 0;
     }
     // Total input = non-cached + cache creation + cache read
     const input = inputRaw + cacheCreation + cacheRead;
@@ -42,53 +42,54 @@
     };
   }
 
-  const todayEntries = entries.filter(e => new Date(e.timestamp).getTime() >= todayStart);
-  const weekEntries = entries.filter(e => new Date(e.timestamp).getTime() >= weekStart);
+  const todayEntries = $derived(entries.filter(e => new Date(e.timestamp).getTime() >= todayStart));
+  const weekEntries = $derived(entries.filter(e => new Date(e.timestamp).getTime() >= weekStart));
 
-  const allStats = sumEntries(entries);
-  const todayStats = sumEntries(todayEntries);
-  const weekStats = sumEntries(weekEntries);
+  const allStats = $derived(sumEntries(entries));
+  const todayStats = $derived(sumEntries(todayEntries));
+  const weekStats = $derived(sumEntries(weekEntries));
 
   // Daily cost stacked by model + token breakdown
-  const dailyMap = new Map<string, { costByModel: Map<string, number>; inputUncached: number; inputCached: number; output: number }>();
-  const modelSet = new Set<string>();
-  for (const e of entries) {
-    const day = new Date(e.timestamp).toLocaleDateString('en-CA'); // YYYY-MM-DD in local tz
-    const model = e.model ?? 'unknown';
-    modelSet.add(model);
-    if (!dailyMap.has(day)) dailyMap.set(day, { costByModel: new Map(), inputUncached: 0, inputCached: 0, output: 0 });
-    const d = dailyMap.get(day)!;
-    d.costByModel.set(model, (d.costByModel.get(model) ?? 0) + (e.costUsd ?? 0));
-    d.inputUncached += e.inputTokens + e.cacheCreationTokens;
-    d.inputCached += e.cacheReadTokens;
-    d.output += e.outputTokens;
-  }
-  const models = [...modelSet].sort();
-  const dailyCost = [...dailyMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([day, d]) => ({
-      day,
-      totalCost: [...d.costByModel.values()].reduce((s, v) => s + v, 0),
-      costByModel: Object.fromEntries(d.costByModel),
-      inputUncached: d.inputUncached,
-      inputCached: d.inputCached,
-      output: d.output,
-      totalTokens: d.inputUncached + d.inputCached + d.output,
-    }));
-  const maxDailyCost = Math.max(...dailyCost.map(d => d.totalCost), 0.01);
-  const maxDailyTokens = Math.max(...dailyCost.map(d => d.totalTokens), 1);
-
-  // Model colors — deterministic palette
-  const modelColors: Record<string, string> = {};
-  const palette = [
-    'var(--chart-bar, #60a5fa)',
-    'var(--chart-cache, #34d399)',
-    '#f472b6',
-    '#fbbf24',
-    '#a78bfa',
-    '#fb923c',
-  ];
-  models.forEach((m, i) => { modelColors[m] = palette[i % palette.length]; });
+  const { dailyCost, maxDailyCost, maxDailyTokens, models, modelColors } = $derived.by(() => {
+    const dailyMap = new Map<string, { costByModel: Map<string, number>; inputUncached: number; inputCached: number; output: number }>();
+    const modelSet = new Set<string>();
+    for (const e of entries) {
+      const day = new Date(e.timestamp).toLocaleDateString('en-CA'); // YYYY-MM-DD in local tz
+      const model = e.model ?? 'unknown';
+      modelSet.add(model);
+      if (!dailyMap.has(day)) dailyMap.set(day, { costByModel: new Map(), inputUncached: 0, inputCached: 0, output: 0 });
+      const d = dailyMap.get(day)!;
+      d.costByModel.set(model, (d.costByModel.get(model) ?? 0) + (e.costUsd ?? 0));
+      d.inputUncached += e.inputTokens + e.cacheCreationTokens;
+      d.inputCached += e.cacheReadTokens;
+      d.output += e.outputTokens;
+    }
+    const models = [...modelSet].sort();
+    const dailyCost = [...dailyMap.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, d]) => ({
+        day,
+        totalCost: [...d.costByModel.values()].reduce((s, v) => s + v, 0),
+        costByModel: Object.fromEntries(d.costByModel),
+        inputUncached: d.inputUncached,
+        inputCached: d.inputCached,
+        output: d.output,
+        totalTokens: d.inputUncached + d.inputCached + d.output,
+      }));
+    const maxDailyCost = Math.max(...dailyCost.map(d => d.totalCost), 0.01);
+    const maxDailyTokens = Math.max(...dailyCost.map(d => d.totalTokens), 1);
+    const palette = [
+      'var(--chart-bar, #60a5fa)',
+      'var(--chart-cache, #34d399)',
+      '#f472b6',
+      '#fbbf24',
+      '#a78bfa',
+      '#fb923c',
+    ];
+    const modelColors: Record<string, string> = {};
+    models.forEach((m, i) => { modelColors[m] = palette[i % palette.length]; });
+    return { dailyCost, maxDailyCost, maxDailyTokens, models, modelColors };
+  });
 
   // Helpers
   function fmtCost(n: number) { return `$${n.toFixed(4)}`; }
@@ -113,10 +114,10 @@
   function fmtTokens(n: number) { return n.toLocaleString(); }
 
   // Agent costs (computed server-side, with transcript-based estimates as fallback)
-  const agentCosts: Record<string, { cost: number; estimated: boolean }> = data.agentCosts ?? {};
+  const agentCosts = $derived(data.agentCosts as Record<string, { cost: number; estimated: boolean }> ?? {});
 
   // Agent registry
-  const allAgents = Object.entries(data.agents)
+  const allAgents = $derived(Object.entries(data.agents)
     .map(([name, entry]: [string, any]) => ({
       name,
       type: entry.type as string,
@@ -131,20 +132,20 @@
     .sort((a, b) => {
       const typeOrder: Record<string, number> = { orchestrator: 0, builder: 1, helper: 2 };
       return (typeOrder[a.type] ?? 3) - (typeOrder[b.type] ?? 3);
-    });
+    }));
 
   // Partition agents: active/idle, recently destroyed (<1h), older destroyed
   const ONE_HOUR = 60 * 60 * 1000;
-  const liveAgents = allAgents.filter(a => a.status !== 'destroyed');
-  const destroyedAgents = allAgents.filter(a => a.status === 'destroyed');
-  const recentlyDestroyed = destroyedAgents.filter(
+  const liveAgents = $derived(allAgents.filter(a => a.status !== 'destroyed'));
+  const destroyedAgents = $derived(allAgents.filter(a => a.status === 'destroyed'));
+  const recentlyDestroyed = $derived(destroyedAgents.filter(
     a => now - new Date(a.createdAt).getTime() < ONE_HOUR
-  );
-  const olderDestroyed = destroyedAgents.filter(
+  ));
+  const olderDestroyed = $derived(destroyedAgents.filter(
     a => now - new Date(a.createdAt).getTime() >= ONE_HOUR
-  );
-  const agentList = [...liveAgents, ...recentlyDestroyed];
-  const activeAgentCount = liveAgents.filter(a => a.status === 'active').length;
+  ));
+  const agentList = $derived([...liveAgents, ...recentlyDestroyed]);
+  const activeAgentCount = $derived(liveAgents.filter(a => a.status === 'active').length);
   let showAllDestroyed = $state(false);
   const displayAgents = $derived(showAllDestroyed ? [...agentList, ...olderDestroyed] : agentList);
 
@@ -158,20 +159,10 @@
   }
 
   // State file tabs
-  const stateFiles = data.stateFiles ?? [];
+  const stateFiles = $derived(data.stateFiles ?? []);
   let activeFileTab = $state(0);
   const activeFile = $derived(stateFiles[activeFileTab]);
 
-  // Memory entries
-  const memories = data.memories ?? [];
-  const memoriesSorted = [...memories].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  );
-  let showAllMemories = $state(false);
-  const MEMORY_PREVIEW_COUNT = 10;
-  const displayMemories = $derived(
-    showAllMemories ? memoriesSorted : memoriesSorted.slice(0, MEMORY_PREVIEW_COUNT)
-  );
 </script>
 
 <svelte:head>
@@ -426,44 +417,6 @@
             {/each}
           </tbody>
         </table>
-      {/if}
-    </div>
-
-    <!-- Memory -->
-    <div class="card memory-card">
-      <div class="card-header">
-        <h2>Memory</h2>
-        <span class="stat-detail">
-          {memories.length} entries{#if memories.length > MEMORY_PREVIEW_COUNT}
-            <button class="toggle-link" onclick={() => showAllMemories = !showAllMemories}>
-              {showAllMemories ? 'Show less' : `Show all ${memories.length}`}
-            </button>
-          {/if}
-        </span>
-      </div>
-      {#if memories.length === 0}
-        <p class="empty-state">No memories stored yet</p>
-      {:else}
-        <div class="memory-list">
-          {#each displayMemories as mem}
-            <div class="memory-item">
-              <div class="memory-header">
-                <span class="memory-title">{mem.title}</span>
-                <span class="memory-meta">
-                  by {mem.createdBy} &middot; recalled {mem.recallCount}x &middot; {fmtAge(mem.updatedAt)}
-                </span>
-              </div>
-              {#if mem.tags.length > 0}
-                <div class="memory-tags">
-                  {#each mem.tags as tag}
-                    <span class="memory-tag">{tag}</span>
-                  {/each}
-                </div>
-              {/if}
-              <div class="memory-content">{mem.content.slice(0, 150)}{mem.content.length > 150 ? '...' : ''}</div>
-            </div>
-          {/each}
-        </div>
       {/if}
     </div>
 
@@ -794,64 +747,6 @@
     color: var(--text-secondary);
     min-width: 2.5rem;
     text-align: right;
-  }
-
-  /* Memory */
-  .memory-card {
-    grid-column: 1 / -1;
-  }
-
-  .memory-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .memory-item {
-    padding: 0.6rem 0.75rem;
-    background: var(--bg-secondary);
-    border-radius: var(--radius-sm);
-  }
-
-  .memory-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 0.5rem;
-  }
-
-  .memory-title {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--text-primary);
-  }
-
-  .memory-meta {
-    font-size: 0.7rem;
-    color: var(--text-tertiary);
-    white-space: nowrap;
-  }
-
-  .memory-tags {
-    display: flex;
-    gap: 0.3rem;
-    margin-top: 0.25rem;
-  }
-
-  .memory-tag {
-    font-size: 0.65rem;
-    padding: 0.1rem 0.4rem;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-  }
-
-  .memory-content {
-    margin-top: 0.3rem;
-    font-size: 0.8rem;
-    color: var(--text-secondary);
-    line-height: 1.4;
   }
 
   /* Config */

@@ -1,3 +1,17 @@
+const dim = (s: string) => `\x1b[2m${s}\x1b[22m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[39m`;
+
+export const BANNER = cyan(`
+     ▄▄                              ▄▄▄▄▄▄▄
+   ▄█▀▀█▄                     █▄    █▀██▀▀▀          █▄
+   ██  ██      ▄▄       ▄    ▄██▄     ██  ▄    ▀▀    ██
+   ██▀▀██   ▄████ ▄█▀█▄ ████▄ ██      ███▀████▄██ ▄████ ▄▀▀█▄ ██ ██
+ ▄ ██  ██   ██ ██ ██▄█▀ ██ ██ ██    ▄ ██  ██   ██ ██ ██ ▄█▀██ ██▄██
+ ▀██▀  ▀█▄█▄▀████▄▀█▄▄▄▄██ ▀█▄██    ▀██▀ ▄█▀  ▄██▄█▀███▄▀█▄██▄▄▀██▀
+               ██                                               ██
+             ▀▀▀                                              ▀▀▀
+`);
+
 const MAIN_HELP = `
 friday — CLI for the Friday Slack-to-Claude bridge
 
@@ -14,6 +28,7 @@ Commands:
   transcript <agent> Export full transcript as markdown
   mail               Inter-agent mail (check, read, send)
   send               Shorthand for 'friday mail send'
+  schedule           Manage scheduled (cron) agents
   dev                Development mode commands
   doctor             Validate your Friday installation
   setup              Bootstrap a new Friday installation
@@ -225,6 +240,39 @@ Options:
   --help, -h         Show this help
 `.trim();
 
+const SCHEDULE_HELP = `
+friday schedule — Manage scheduled (cron) agents
+
+Usage: friday schedule <subcommand> [options]
+
+Subcommands:
+  list               List all scheduled agents (default)
+  create             Create a new scheduled agent
+  pause <name>       Pause a scheduled agent
+  resume <name>      Resume a paused scheduled agent
+  trigger <name>     Queue an immediate run
+  delete <name>      Soft-delete a scheduled agent
+
+Create options:
+  --name <name>      Agent name (required, will be prefixed with 'scheduled-')
+  --cron <expr>      5-field cron expression (e.g. '0 */6 * * *')
+  --run-at <iso>     ISO 8601 timestamp for one-shot execution
+  --tz <timezone>    Timezone for cron (e.g. 'America/New_York')
+  --task <prompt>    Task prompt — what the agent does each run (required)
+  --cwd <path>       Working directory (default: ~/.friday/working)
+  --system-prompt    Additional system prompt context
+
+Examples:
+  friday schedule list
+  friday schedule create --name openclaw --cron "0 */6 * * *" --task "Check OpenClaw API..."
+  friday schedule pause scheduled-openclaw
+  friday schedule trigger scheduled-openclaw
+  friday schedule delete scheduled-openclaw
+
+Options:
+  --help, -h         Show this help
+`.trim();
+
 export const HELP: Record<string, string> = {
   main: MAIN_HELP,
   usage: USAGE_HELP,
@@ -239,6 +287,7 @@ export const HELP: Record<string, string> = {
   transcript: TRANSCRIPT_HELP,
   doctor: DOCTOR_HELP,
   setup: SETUP_HELP,
+  schedule: SCHEDULE_HELP,
 };
 
 export function showHelp(command: string): void {

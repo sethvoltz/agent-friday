@@ -1,28 +1,32 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  AGENTS_PATH,
-  USAGE_LOG_PATH,
   SESSIONS_DIR,
   loadConfig,
   resolveTranscriptPath,
   parseTranscript,
-  type AgentRegistry,
+  getSessionDateRange,
+  getIndexedRanges,
+  getSessionStats,
+  getSessionAggregates,
   type RegistryEntry,
-  type UsageEntry,
   type Turn,
 } from "@friday/shared";
+
+export interface ScheduledRun {
+  sessionId: string;
+  firstAt: string;
+  lastAt: string;
+  isCurrent: boolean;
+}
 import type { PageServerLoad } from "./$types";
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, parent }) => {
   const { name, sessionId: requestedSessionId } = params;
   const config = loadConfig();
 
-  // Load registry
-  let agents: AgentRegistry = {};
-  if (existsSync(AGENTS_PATH)) {
-    try { agents = JSON.parse(readFileSync(AGENTS_PATH, "utf-8")); } catch { /* skip */ }
-  }
+  // Registry inherited from the root layout.
+  const { agents } = await parent();
 
   const entry = agents[name] ?? null;
 
@@ -43,23 +47,11 @@ export const load: PageServerLoad = async ({ params }) => {
     }
   }
 
-  // If still no session, find most recent from usage
-  if (!sessionId && entry) {
-    if (existsSync(USAGE_LOG_PATH)) {
-      const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-      let latest: { sessionId: string; timestamp: string } | null = null;
-      for (const line of lines) {
-        try {
-          const e: UsageEntry = JSON.parse(line);
-          if (entry.sessionId === e.sessionId || e.sessionType === entry.type) {
-            if (!latest || e.timestamp > latest.timestamp) {
-              latest = { sessionId: e.sessionId, timestamp: e.timestamp };
-            }
-          }
-        } catch { /* skip */ }
-      }
-      if (latest) sessionId = latest.sessionId;
-    }
+  // If still no session and the entry tracks former IDs, fall back to the
+  // most recent former. (The legacy JSONL fallback matched any session of
+  // the same agent type — too broad in practice; the registry is correct.)
+  if (!sessionId && entry?.formerSessionIds?.length) {
+    sessionId = entry.formerSessionIds[entry.formerSessionIds.length - 1];
   }
 
   // Load transcript
@@ -76,35 +68,66 @@ export const load: PageServerLoad = async ({ params }) => {
       try {
         turns = await parseTranscript(jsonlPath);
         totalTurns = turns.length;
-      } catch { /* skip */ }
+      } catch (err) {
+        console.error(
+          `parseTranscript failed for ${jsonlPath}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
   }
 
-  // Session stats from usage log
+  // Session stats — single aggregation query
   let stats: { turns: number; cost: number; firstAt: string; lastAt: string } | null = null;
-  if (sessionId && existsSync(USAGE_LOG_PATH)) {
-    const lines = readFileSync(USAGE_LOG_PATH, "utf-8").split("\n").filter((l) => l.trim());
-    let turnCount = 0;
-    let cost = 0;
-    let firstAt = "";
-    let lastAt = "";
-    for (const line of lines) {
-      try {
-        const e: UsageEntry = JSON.parse(line);
-        if (e.sessionId === sessionId) {
-          turnCount++;
-          cost += e.costUsd ?? 0;
-          if (!firstAt) firstAt = e.timestamp;
-          lastAt = e.timestamp;
-        }
-      } catch { /* skip */ }
-    }
-    if (turnCount > 0) {
-      stats = { turns: turnCount, cost, firstAt, lastAt };
+  if (sessionId) {
+    const dbStats = getSessionStats(sessionId);
+    if (dbStats) {
+      stats = {
+        turns: dbStats.turnCount,
+        cost: dbStats.totalCostUsd,
+        firstAt: dbStats.firstTurnAt,
+        lastAt: dbStats.lastTurnAt,
+      };
     }
   }
 
   const isFormer = requestedSessionId != null || (entry?.status === "destroyed");
+
+  // For scheduled agents, build the list of runs (current + formers) for the run picker.
+  let scheduledRuns: ScheduledRun[] | null = null;
+  if (entry?.type === "scheduled") {
+    const cwd = entry.cwd;
+    const currentSessionId = entry.sessionId;
+    const formerIds = entry.formerSessionIds ?? [];
+
+    // Per-session aggregates pulled in a single GROUP BY query.
+    const allIds = currentSessionId ? [currentSessionId, ...formerIds] : [...formerIds];
+    const sessionStats = getSessionAggregates(allIds);
+    const indexedRanges = getIndexedRanges(allIds);
+    scheduledRuns = allIds.map((sid) => {
+      const stats = sessionStats.get(sid);
+      let firstAt = stats?.firstAt ?? "";
+      let lastAt = stats?.lastAt ?? "";
+      if (!firstAt) {
+        const indexed = indexedRanges.get(sid);
+        if (indexed) {
+          firstAt = indexed.firstAt;
+          lastAt = indexed.lastAt;
+        } else {
+          const range = getSessionDateRange(sid, cwd);
+          if (range) {
+            firstAt = range.firstAt;
+            lastAt = range.lastAt;
+          }
+        }
+      }
+      return {
+        sessionId: sid,
+        firstAt,
+        lastAt,
+        isCurrent: sid === currentSessionId,
+      };
+    });
+  }
 
   return {
     agentName: name,
@@ -114,5 +137,6 @@ export const load: PageServerLoad = async ({ params }) => {
     totalTurns,
     stats,
     isFormer,
+    scheduledRuns,
   };
 };

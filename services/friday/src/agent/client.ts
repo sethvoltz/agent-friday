@@ -1,9 +1,11 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { SessionType } from "@friday/shared";
 import { getSessionId, setSessionId } from "../sessions/manager.js";
 import { logUsage } from "../monitor/usage.js";
 import { log } from "../log.js";
 import { eventBus } from "../events/bus.js";
+import type { MultimodalPrompt } from "../sessions/queue.js";
 
 export interface AgentOptions {
   channelId: string;
@@ -26,15 +28,38 @@ export interface AgentCallbacks {
   onThinkingStart?: (elapsedSec: number) => void;
   onThinkingTick?: (elapsedSec: number) => void;
   onThinkingEnd?: () => void;
+  onToolUse?: (toolName: string) => void;
+}
+
+async function* multimodalStream(mp: MultimodalPrompt): AsyncIterable<SDKUserMessage> {
+  yield {
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        ...mp.images.map((img) => ({
+          type: "image" as const,
+          source: {
+            type: "base64" as const,
+            media_type: img.mediaType as any,
+            data: img.data,
+          },
+        })),
+        { type: "text" as const, text: mp.text },
+      ],
+    },
+    parent_tool_use_id: null,
+  };
 }
 
 /**
  * Send a prompt to the agent and stream text chunks as they arrive.
+ * Accepts a plain string or a MultimodalPrompt (text + images).
  * onChunk is called with each new piece of text.
  * Returns the full accumulated response.
  */
 export async function sendToAgent(
-  prompt: string,
+  prompt: string | MultimodalPrompt,
   options: AgentOptions,
   callbacksOrOnChunk?: AgentCallbacks | ((text: string) => void)
 ): Promise<string> {
@@ -104,9 +129,12 @@ export async function sendToAgent(
     queryOptions.resume = existingSessionId;
   }
 
+  const queryPrompt =
+    typeof prompt === "string" ? prompt : multimodalStream(prompt);
+
   try {
     for await (const message of query({
-      prompt,
+      prompt: queryPrompt,
       options: queryOptions,
     })) {
       if (message.type === "assistant") {
@@ -137,6 +165,15 @@ export async function sendToAgent(
             const sessionId = existingSessionId ?? "";
             eventBus.publish({ type: "turn:streaming", agentName: eventAgentName, sessionId, text: responseText });
           }
+        }
+      }
+
+      // Detect tool invocations. tool_progress is not in the SDK's exported
+      // message-type union yet; narrow via a typed local view.
+      if (message.type === "tool_progress") {
+        const toolName = (message as { tool_name?: unknown }).tool_name;
+        if (typeof toolName === "string" && toolName.length > 0) {
+          callbacks.onToolUse?.(toolName);
         }
       }
 
@@ -193,21 +230,24 @@ export async function sendToAgent(
           durationMs,
         });
 
-        // Append to usage log file
-        logUsage({
-          timestamp: new Date().toISOString(),
-          channelId: options.channelId,
-          sessionType: options.sessionType,
-          sessionId,
-          model: options.model,
-          costUsd,
-          inputTokens,
-          outputTokens,
-          cacheCreationTokens,
-          cacheReadTokens,
-          turnNumber,
-          durationMs,
-        });
+        // Persist usage to the SQLite `usage` table
+        logUsage(
+          {
+            timestamp: new Date().toISOString(),
+            channelId: options.channelId,
+            sessionType: options.sessionType,
+            sessionId,
+            model: options.model,
+            costUsd,
+            inputTokens,
+            outputTokens,
+            cacheCreationTokens,
+            cacheReadTokens,
+            turnNumber,
+            durationMs,
+          },
+          options.sessionType === "orchestrator" ? "orchestrator" : null,
+        );
 
         eventBus.publish({ type: "turn:complete", agentName: eventAgentName, sessionId });
       }

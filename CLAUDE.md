@@ -9,10 +9,11 @@ A local-first Slack-to-Claude-Code bridge with a multi-agent orchestration syste
 This project has living documentation that must stay current with the code:
 
 - `docs/architecture.md` — System overview, components, message flow, state layout, agent hierarchy, testing
-- `docs/decisions.md` — Architecture Decision Records (ADRs)
+- `docs/decisions.md` — Architecture Decision Records (ADRs); see ADR-020 for the SQLite + Drizzle layer
 - `docs/configure-friday.md` — Config file reference
 - `docs/setup-friday.md` — Setup guide
 - `docs/running.md` — How to run the daemon and services
+- `.claude/rules/drizzle-migrations.md` — Rules for evolving the DB schema
 
 **When you make changes**, update the relevant docs. If you add a module, update the architecture table. If you change message flow, update the flow diagrams. If you make an architectural decision, add an ADR. If you add a test file, update the testing coverage table. Documentation that drifts from the code is worse than no documentation.
 
@@ -43,6 +44,7 @@ pnpm --filter @friday/daemon exec vitest run src/path/to/file.test.ts  # Single 
 - TypeScript throughout, Vitest for tests, pnpm workspaces + Turborepo
 - Tests are co-located with source as `*.test.ts`
 - All state lives in `~/.friday/` — never hardcode paths, use constants from `@friday/shared`
+- **`@friday/shared` is consumed via its built `dist/` (see `packages/shared/package.json` `exports`).** When you edit shared source, run `pnpm --filter @friday/shared build` before exercising the change in the daemon or dashboard — vitest reads source directly so tests will pass even when consumers still see the stale dist.
 
 ## Versioning
 
@@ -67,7 +69,7 @@ docs: update architecture table
 chore: bump dependencies
 ```
 
-**Scopes:** `daemon`, `dashboard`, `shared`, `cli`, `memory`, `docs`, `ci`. Use `system` for cross-cutting changes that touch multiple packages in a single commit.
+**Scopes:** `daemon`, `dashboard`, `shared`, `cli`, `memory`, `database`, `docs`, `ci`. Use `system` for cross-cutting changes that touch multiple packages in a single commit.
 
 **Subject line rules:**
 - Lowercase, imperative mood, no trailing period

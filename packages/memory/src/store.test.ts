@@ -22,6 +22,7 @@ const {
   ensureMemoryDirs,
   MEMORY_DIR,
 } = await import("./store.js");
+const { closeDb } = await import("@friday/shared");
 
 describe("memory store", () => {
   beforeEach(() => {
@@ -30,6 +31,7 @@ describe("memory store", () => {
   });
 
   afterEach(() => {
+    closeDb();
     rmSync(testDir, { recursive: true, force: true });
   });
 

@@ -291,3 +291,96 @@
 **Consequences:**
 - Log file grows unbounded. May need rotation or size-based truncation in the future.
 - Sync writes could theoretically block the event loop on a very slow disk — negligible in practice
+
+---
+
+## ADR-020: SQLite + Drizzle for Opaque Operational Data
+
+**Date:** 2026-04-26
+**Status:** Accepted
+
+**Context:** The dashboard's home page and sessions layout were each scanning `~/.friday/usage.jsonl` 2–4 times per navigation, with no shared parse — by ten messages the file had been parsed dozens of times. The same query pattern (sums, counts, min/max, group-by) repeated across loaders. Memory search (`packages/memory/src/search.ts`) read every `.md` file from disk on every query. Transcript date-range lookups did partial-file reads of `~/.claude/projects/**/<sessionId>.jsonl` per former session in the registry, on every dashboard navigation. All of this was solving aggregation/index problems with file scans.
+
+**Decision:** Adopt SQLite (WAL mode) backed by `better-sqlite3` and the Drizzle ORM. Schema lives in `packages/shared/src/db/schema.ts`; generated migrations live in `packages/shared/drizzle/` and run on first DB open per process. Both daemon and dashboard processes open the same `~/.friday/friday.db`.
+
+The DB stores only **opaque operational data**:
+- `usage` table — replaces `usage.jsonl` (one-shot import, then renamed `.migrated-<date>`)
+- `memories` table + `memories_fts` (FTS5) — derived index over `memory/entries/*.md`; `.md` is still source of truth
+- `transcript_index` table — derived index over `~/.claude/projects/**/*.jsonl`; SDK files untouched
+- `db_meta` — generic key/value (e.g. last reconcile timestamps)
+
+User-editable files (`config.json`, `agents.json`, `*.md`) stay as files. The DB only mirrors them when the original is large enough that scanning hurts; the user-facing copy is always authoritative.
+
+**Rationale:**
+- WAL lets daemon and dashboard hold concurrent connections to the same file without locking ceremony.
+- Drizzle gives us TypeScript-first schemas, generated migrations (no hand-rolled DDL drift), and lightweight queries with no codegen step at runtime. Both the daemon and dashboard import the same query module from `@friday/shared`.
+- Aggregation queries (cost-by-agent, session date ranges, recall search) become indexed lookups instead of full-file scans.
+- Memory FTS5 makes free-text search proportional to result count, not corpus size, while the `.md` file model continues to support hand-editing and `grep`.
+- mtime-based reconciliation with a 60s overlap window keeps the derived indexes fresh without touching `.md` files on every recall (which would create needless file churn).
+- The dashboard's `parent()`-based registry dedup (Phase 2 of this work) and `getIndexedRanges()` (Phase 3b) eliminate the read amplification.
+
+**Consequences:**
+- New native dependency (`better-sqlite3`). Acceptable — the workspace already builds native modules.
+- First-boot migration from `usage.jsonl` is one-shot; the source file is renamed (not deleted) to preserve data.
+- FTS5 virtual tables and triggers aren't modeled by Drizzle and live in `runMigrations()` as raw SQL (idempotent `CREATE … IF NOT EXISTS`).
+- The transcript indexer must skip live sessions (sessionId in the registry) because the SDK is still appending; otherwise it could cache a stale `lastTimestamp`.
+- See `.claude/rules/drizzle-migrations.md` for migration discipline future agents must follow.
+
+## ADR-021: Fork-Based Agent Process Tree with IPC Heartbeats
+
+**Date:** 2026-04-28
+**Status:** Accepted
+
+**Context:** The original architecture ran each Builder and Helper as an `async` loop inside the daemon process. This meant:
+- A misbehaving agent could hang the whole daemon
+- There was no way to kill an agent's in-flight turn without killing the daemon
+- Stall detection was time-based (last activity > threshold), producing false positives during legitimate long tool calls (e.g., `npm install`)
+- The user had no mid-task interrupt path from Slack
+
+**Decision:** Replace the async-loop-per-agent model with `child_process.fork()`. Each agent runs in an isolated Node.js process supervised by the daemon.
+
+Key design choices:
+- Each worker emits IPC heartbeats (`chunk-received`, `tool-start`, `tool-end`, `mail-sent`) so the supervisor has fine-grained state without polling
+- Stall detection uses 3 conditions simultaneously: `lastChunkAt` stale + `!toolCallActive` + `!waitingForMail`. A slow build with an active tool call is never flagged
+- `WorkerSpawnOptions` is fully serialisable (no functions/closures) so workers can be killed and re-forked with identical config; MCP servers are reconstructed inside the worker
+- Kill sequence: `agent_kill` (soft/hard), SIGTERM → 5s → SIGKILL for graceful destroy; re-fork preserves workspace + session ID
+- Worker path uses `import.meta.url.endsWith(".ts")` to pick `.ts` in dev (tsx) vs `.js` in prod; `execArgv: process.execArgv` propagates the tsx loader to child processes
+
+**Rationale:**
+- Process isolation prevents agent runaway from affecting the supervisor or other agents
+- IPC heartbeats provide richer signal than timestamps: a tool-active agent is never a stall, even if no text has been generated in 10 minutes
+- Re-fork without workspace teardown enables the Orchestrator to restart a stuck agent mid-epic without losing work
+- The `/friday kill <agent>` Slack command gives users an escape hatch for runaway agents from their phone
+
+**Consequences:**
+- Each agent now consumes an OS process slot. In practice the system runs ≤10 agents, so this is not a concern.
+- Workers must reconstruct MCP servers (mail, agent-tools) internally from serialisable `WorkerSpawnOptions` — these cannot be passed via IPC.
+- Orphaned child processes are possible if the daemon crashes uncleanly. On restart, `restoreActiveAgents()` spawns fresh workers, leaving the orphans to be collected by the OS when they exit naturally. No durable PID registry is maintained.
+- The `spawnOptions` cache is in-memory only. If a daemon restart occurs between `killAgentByName` and `reforkAgentByName`, the refork will fail (no stored options). The workaround is `restoreActiveAgents()` on restart, which rebuilds options from the registry.
+
+## ADR-022: Two-Tier LLM Evolve Pipeline (Haiku Breadth + Sonnet Depth)
+
+**Date:** 2026-04-27
+**Status:** Accepted
+
+**Context:** Phase 1 evolve shipped templated proposal bodies with the placeholder "Phase 1 placeholder body. Phase 4 LLM passes will rewrite this…" — an LLM rewrite step that was promised but never built. Separately, the existing scanners (`scanDaemonLog`, `scanFeedback`, `scanUsageLog`, `scanTranscripts`) only catch *operational* pain (crashes, retry bursts, token spikes). They miss the slow drip of *trust erosion* — short user corrections like "no, I said…", "wait, why did you…", "hey, I thought we were…" — which is the single most important signal that Friday is no longer behaving as the user's right hand. Friday is positioned as the user's most-trusted assistant; the improvement loop has to listen for that erosion specifically.
+
+**Decision:** Split LLM use across two tiers and add friction as a first-class signal dimension under the "Evolve with Intent" framing.
+
+1. **Haiku for breadth — friction scoring.** `scan-friction.ts` walks orchestrator transcripts only (current + former session ids from `agents.json`), pairs each user turn with its prior assistant text, batches 30 turns per call, and asks Haiku to score each on a 0-5 scale plus one of `correction|confusion|repeat|reset|frustration|doubt|redirect|none`. Score ≥ 2 with a non-`none` category becomes a `friction_<category>` signal; below that is dropped. Severity tiering: 4-5 → high, 3 → medium, 2 → low. Up to 3 highest-friction evidence pointers per signal. Tool-result-only turns and `<memory-context>` blocks are filtered before scoring.
+2. **Sonnet for depth — proposal enrichment.** `enrich.ts` rewrites templated proposal bodies one at a time. Each call hydrates the signal's evidence pointers (±2 lines around `pointer.line`, capped at 2000 chars), then asks Sonnet for `{body, type, blastRadius}` with sections **Signal summary** | **Root cause** | **Suggested change**. Idempotent: skips when `enrichedAt >= updatedAt` unless `--force`. The system prompt explicitly flags `friction_*` signals as trust-erosion indicators that deserve extra care (typically a memory or system-prompt edit that prevents the next instance).
+3. **Both tiers use the agent SDK** (`query()` from `@anthropic-ai/claude-agent-sdk`) with `allowedTools: []` and `permissionMode: "bypassPermissions"`. This keeps Pro/Max subscription billing (ADR-003) — no `ANTHROPIC_API_KEY` required.
+4. **Wired into existing meta-agents.** `scheduled-meta-daily` and `scheduled-meta-weekly` now run `scan → enrich → list` (and `cluster` for weekly). Friction scanning is failure-isolated in the CLI: a transient Haiku error returns `[]` so the rest of the scan still produces a record.
+
+**Rationale:**
+- **Two tiers, not one.** Sonnet on every transcript turn would be wasteful and slow; Haiku on every proposal body would be too shallow. Haiku grades hundreds of cheap items (turns); Sonnet writes a few dozen expensive items (proposal bodies).
+- **Sentiment over regex.** A patterned regex for friction phrases ("no, I said", "wait, why") would catch the obvious cases and miss everything else. Haiku reads tone, including negative cases ("no problem" = 0). Volume is low (daily / weekly with ≤7 day windows), so the cost is bounded.
+- **Idempotency is non-negotiable.** Daily scans re-run forever. Without `enrichedAt >= updatedAt` skipping, every daily pass would re-call Sonnet on every proposal. The check on `updatedAt` means freshly merged signals trigger re-enrichment naturally.
+- **Friction signals belong inside the same Proposal datatype.** Same `signalHash` collapsing, same scoring, same review surface. The `key` prefix `friction_*` is the only marker the orchestrator and apply path need.
+- **Self-exclusion still applies.** Friction scoring runs against the orchestrator's transcripts only; meta-agent transcripts are already excluded because their session ids aren't in the orchestrator's current/former list.
+
+**Consequences:**
+- New runtime dep on `@anthropic-ai/claude-agent-sdk` inside `@friday/evolve` (already a dep of `@friday/daemon`, so install cost is shared).
+- Daily scan latency increases by the Haiku batch time (rough order: a few seconds at typical volume) plus the Sonnet enrichment time per stale proposal. This is fine on a cron-driven agent.
+- Friction signals can produce noisy proposals if Haiku grades a sarcastic-but-positive turn as `correction`. The severity floor (≥ 2) and the `none` category are the main guardrails; if false-positive rate is a problem, raise the floor or add a second confirmation pass.
+- Templated proposal bodies remain readable on first sight — the enrichment pass is additive, not gating. Listing/show works even before enrichment runs.

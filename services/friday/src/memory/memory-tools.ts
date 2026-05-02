@@ -1,6 +1,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import {
+  type MemoryEntry,
   saveEntry,
   getEntry,
   updateEntry,
@@ -110,6 +111,52 @@ export function createMemoryTools(ctx: MemoryToolsContext) {
           });
 
           return ok(`Memory saved: "${entry.title}" (id: ${entry.id})`);
+        }
+      ),
+
+      tool(
+        "memory_update",
+        "Update an existing memory entry in place. Preserves recall history and creation " +
+          "metadata. Use this to correct or extend a memory instead of deleting and re-creating it.",
+        {
+          id: z.string().describe("Memory entry ID to update"),
+          title: z
+            .string()
+            .optional()
+            .describe("New title (omit to keep current)"),
+          content: z
+            .string()
+            .optional()
+            .describe("New content (omit to keep current)"),
+          tags: z
+            .array(z.string())
+            .optional()
+            .describe("New tags (omit to keep current — pass array to replace all tags)"),
+        },
+        async ({ id, title, content, tags }) => {
+          const updates: Partial<Pick<MemoryEntry, "title" | "content" | "tags">> = {};
+          if (title !== undefined) updates.title = title;
+          if (content !== undefined) updates.content = content;
+          if (tags !== undefined) updates.tags = tags;
+
+          if (Object.keys(updates).length === 0) {
+            return err("No updates provided. Specify at least one of: title, content, tags.");
+          }
+
+          const entry = updateEntry(id, updates);
+          if (!entry) {
+            return err(`Memory "${id}" not found.`);
+          }
+
+          logEvent({
+            timestamp: new Date().toISOString(),
+            event: "update",
+            actor: ctx.callerName,
+            entryId: id,
+            tags: entry.tags,
+          });
+
+          return ok(`Memory updated: "${entry.title}" (id: ${entry.id})`);
         }
       ),
 

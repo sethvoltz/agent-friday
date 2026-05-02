@@ -15,7 +15,10 @@ export type FridayEventPayload =
   | { type: "session:updated"; agentName: string; sessionId: string }
   | { type: "turn:streaming"; agentName: string; sessionId: string; text: string }
   | { type: "turn:complete"; agentName: string; sessionId: string }
-  | { type: "usage:logged"; entry: UsageEntry };
+  | { type: "usage:logged"; entry: UsageEntry }
+  | { type: "schedule:triggered"; agentName: string }
+  | { type: "schedule:completed"; agentName: string; durationMs: number }
+  | { type: "schedule:failed"; agentName: string; error: string };
 
 /** Full event with base fields — returned by EventBus after publish */
 export type FridayEvent = BaseEvent & FridayEventPayload;

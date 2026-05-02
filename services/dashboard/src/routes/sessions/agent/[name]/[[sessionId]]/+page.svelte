@@ -1,8 +1,58 @@
 <script lang="ts">
   import { getStreamingText, getDataVersion, clearStreaming } from '$lib/events.svelte';
-  import { invalidateAll } from '$app/navigation';
+  import Markdown from '$lib/Markdown.svelte';
+  import { invalidateAll, goto } from '$app/navigation';
 
   let { data } = $props();
+
+  const isScheduled = $derived(data.entry?.type === 'scheduled');
+  const runs = $derived(data.scheduledRuns ?? []);
+  const currentRunIdx = $derived(
+    isScheduled && data.sessionId
+      ? runs.findIndex((r) => r.sessionId === data.sessionId)
+      : -1
+  );
+
+  function runUrl(sessionId: string, isCurrent: boolean): string {
+    return isCurrent
+      ? `/sessions/agent/${data.agentName}`
+      : `/sessions/agent/${data.agentName}/${sessionId}`;
+  }
+
+  function runLabel(run: { firstAt: string; lastAt: string; isCurrent: boolean }, idx: number, total: number): string {
+    const num = total - idx; // run #N where higher = newer
+    const date = run.firstAt
+      ? new Date(run.firstAt).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : 'no data';
+    const tag = run.isCurrent ? ' (current)' : '';
+    return `Run #${num} · ${date}${tag}`;
+  }
+
+  function onRunSelect(e: Event) {
+    const target = e.target as HTMLSelectElement;
+    const sid = target.value;
+    const run = runs.find((r) => r.sessionId === sid);
+    if (run) goto(runUrl(run.sessionId, run.isCurrent));
+  }
+
+  function gotoPrev() {
+    // "Previous" = older run (higher index in the list)
+    if (currentRunIdx < 0 || currentRunIdx >= runs.length - 1) return;
+    const r = runs[currentRunIdx + 1];
+    goto(runUrl(r.sessionId, r.isCurrent));
+  }
+
+  function gotoNext() {
+    // "Next" = newer run (lower index)
+    if (currentRunIdx <= 0) return;
+    const r = runs[currentRunIdx - 1];
+    goto(runUrl(r.sessionId, r.isCurrent));
+  }
 
   let expandedTools = $state(new Set<string>());
 
@@ -89,21 +139,50 @@
 
 <div class="transcript-page">
   <header class="transcript-header">
-    <div class="header-title">
-      <h2>
-        {#if data.entry}
-          {#if data.entry.type === 'orchestrator'}👑
-          {:else if data.entry.type === 'builder'}🔨
-          {:else}⚡
+    <div class="header-row">
+      <div class="header-title">
+        <h2>
+          {#if data.entry}
+            {#if data.entry.type === 'orchestrator'}👑
+            {:else if data.entry.type === 'builder'}🔨
+            {:else if data.entry.type === 'scheduled'}🕐
+            {:else}⚡
+            {/if}
           {/if}
+          {data.agentName}
+          {#if data.isFormer && !isScheduled}
+            <span class="former-badge">former</span>
+          {/if}
+        </h2>
+        {#if data.entry}
+          <span class="header-meta">{data.entry.type} · {data.entry.status}</span>
         {/if}
-        {data.agentName}
-        {#if data.isFormer}
-          <span class="former-badge">former</span>
-        {/if}
-      </h2>
-      {#if data.entry}
-        <span class="header-meta">{data.entry.type} · {data.entry.status}</span>
+      </div>
+
+      {#if isScheduled && runs.length > 0}
+        <div class="run-nav">
+          <button
+            class="run-btn"
+            onclick={gotoPrev}
+            disabled={currentRunIdx < 0 || currentRunIdx >= runs.length - 1}
+            title="Older run"
+          >← Prev</button>
+          <select
+            class="run-select"
+            value={data.sessionId ?? ''}
+            onchange={onRunSelect}
+          >
+            {#each runs as run, i}
+              <option value={run.sessionId}>{runLabel(run, i, runs.length)}</option>
+            {/each}
+          </select>
+          <button
+            class="run-btn"
+            onclick={gotoNext}
+            disabled={currentRunIdx <= 0}
+            title="Newer run"
+          >Next →</button>
+        </div>
       {/if}
     </div>
 
@@ -154,7 +233,7 @@
             {#if turn.prompt}
               <div class="message user-message">
                 <div class="message-role">User</div>
-                <div class="message-content">{turn.prompt}</div>
+                <div class="message-content"><Markdown source={turn.prompt} /></div>
               </div>
             {/if}
 
@@ -182,7 +261,7 @@
             {#if turn.response}
               <div class="message assistant-message">
                 <div class="message-role">Assistant</div>
-                <div class="message-content">{turn.response}</div>
+                <div class="message-content"><Markdown source={turn.response} /></div>
               </div>
             {/if}
           </div>
@@ -226,10 +305,66 @@
     border-bottom: 1px solid var(--border-subtle);
   }
 
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+
   .header-title {
     display: flex;
     align-items: baseline;
     gap: 0.75rem;
+  }
+
+  .run-nav {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+
+  .run-btn {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .run-btn:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-primary);
+  }
+  .run-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .run-select {
+    padding: 0.3rem 1.6rem 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    font-family: inherit;
+    color: var(--text-secondary);
+    background-color: var(--bg-card);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%23888' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    min-width: 14rem;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: all var(--transition-fast);
+  }
+  .run-select:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--border-primary);
   }
 
   .header-title h2 {

@@ -8,9 +8,13 @@ const sessionsDir = join(testDir, ".friday", "sessions");
 const channelsFile = join(sessionsDir, "channels.json");
 
 // Mock shared paths
-vi.mock("@friday/shared", () => ({
-  SESSIONS_DIR: sessionsDir,
-}));
+vi.mock("@friday/shared", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@friday/shared")>();
+  return {
+    ...actual,
+    SESSIONS_DIR: sessionsDir,
+  };
+});
 
 // Mock logger to silence output
 vi.mock("../log.js", () => ({

@@ -1,9 +1,13 @@
+import { getDb } from "@friday/shared";
+import { reconcileMemories } from "@friday/memory";
 import { loadRuntimeConfig } from "./config.js";
+import { migrateUsageLog } from "./monitor/usage.js";
+import { startTranscriptIndexer, stopTranscriptIndexer } from "./monitor/transcript-indexer.js";
 import { createSlackApp } from "./slack/app.js";
 import { registerEventHandlers } from "./slack/events.js";
 import { loadSessions } from "./sessions/manager.js";
 import { loadRegistry } from "./sessions/registry.js";
-import { initOrchestrator, restoreActiveAgents, isAgentRunning } from "./agent/lifecycle.js";
+import { initOrchestrator, restoreActiveAgents, isAgentRunning, getAgentStallState, killAllAgents } from "./agent/lifecycle.js";
 import { log } from "./log.js";
 import { startHealthHeartbeat, stopHealthHeartbeat } from "./monitor/health.js";
 import { startAgentHealthCheck, stopAgentHealthCheck } from "./monitor/agent-health.js";
@@ -16,6 +20,12 @@ import { createMailTools } from "./comms/mail-tools.js";
 import { buildSystemPrompt, chunkMessage } from "./slack/helpers.js";
 import { slackPreflight } from "./slack/preflight.js";
 import { createMemoryTools } from "./memory/memory-tools.js";
+import { buildMemoryContext } from "./memory/auto-recall.js";
+import { startScheduler, stopScheduler } from "./scheduler/scheduler.js";
+import { drainScheduledRuns } from "./scheduler/trigger.js";
+import { createScheduleTools } from "./scheduler/schedule-tools.js";
+import { seedScheduledMetaAgents } from "./evolve/seed.js";
+import { createEvolveTools } from "./evolve/evolve-tools.js";
 
 async function main() {
   const startTime = Date.now();
@@ -23,6 +33,12 @@ async function main() {
   log("info", "friday_starting", {});
 
   const config = loadRuntimeConfig();
+  // Open the DB (runs pending Drizzle migrations) and import any legacy
+  // usage.jsonl into the `usage` table on first boot.
+  getDb();
+  await migrateUsageLog();
+  const memReconcile = reconcileMemories();
+  log("info", "memory_reconciled", memReconcile);
   loadSessions();
   loadRegistry();
   initOrchestrator();
@@ -48,6 +64,19 @@ async function main() {
     stopHealthHeartbeat();
     stopAgentHealthCheck();
     stopMailPoller();
+    stopScheduler();
+    stopTranscriptIndexer();
+    // Kill all forked agent worker processes before draining scheduled runs.
+    await killAllAgents(5_000);
+    // Wait for in-flight scheduled runs to abort cleanly before exiting.
+    // Without this, SIGTERM mid-run leaves orphan SDK subprocesses and stale "active" status.
+    try {
+      await drainScheduledRuns(10_000);
+    } catch (err) {
+      log("error", "scheduler_drain_error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     await stopEventServer();
     try {
       await app.stop();
@@ -73,6 +102,7 @@ async function main() {
   await app.start();
   startHealthHeartbeat({ eventServerPort: config.eventServer.port });
   await startEventServer(config.eventServer.port);
+  startTranscriptIndexer();
 
   const orchChannelId = config.slack.orchestratorChannelId;
   const maxLen = config.slack_formatting.maxMessageLength;
@@ -109,7 +139,13 @@ async function main() {
         });
         const mailMcp = createMailTools({ callerName: "orchestrator" });
 
-        const response = await sendToAgent(prompt, {
+        // Auto-recall: inject relevant memories into the mail prompt
+        const memoryContext = buildMemoryContext(prompt);
+        const enrichedPrompt = memoryContext
+          ? `${memoryContext}\n\n${prompt}`
+          : prompt;
+
+        const response = await sendToAgent(enrichedPrompt, {
           channelId: orchChannelId,
           sessionType: "orchestrator",
           workingDirectory: config.agent.workingDirectory,
@@ -120,6 +156,11 @@ async function main() {
             "friday-agents": agentMcp,
             "friday-mail": mailMcp,
             "friday-memory": createMemoryTools({ callerName: "orchestrator" }),
+            "friday-scheduler": createScheduleTools({
+              model: config.agent.model,
+              defaultCwd: config.agent.workingDirectory,
+            }),
+            "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
           },
           systemPrompt: buildSystemPrompt(
             config,
@@ -150,8 +191,16 @@ async function main() {
   // Restore agents that were active before shutdown
   restoreActiveAgents(config.agent.model);
 
-  // Start agent health monitoring
-  startAgentHealthCheck({ isAgentRunning });
+  // Idempotently seed the daily self-improvement analyst before the scheduler
+  // starts checking — otherwise its nextRunAt won't be considered until the
+  // following 30s tick.
+  seedScheduledMetaAgents({ cwd: config.agent.workingDirectory });
+
+  // Start the scheduler for cron/one-shot scheduled agents
+  startScheduler({ model: config.agent.model });
+
+  // Start agent health monitoring with IPC-based stall detection
+  startAgentHealthCheck({ isAgentRunning, getStallState: getAgentStallState });
 
   log("info", "friday_ready", {
     pid: process.pid,

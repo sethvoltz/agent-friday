@@ -1,17 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const testDir = join(tmpdir(), `friday-usage-test-${process.pid}-${Date.now()}`);
-const logPath = join(testDir, "logs", "usage.jsonl");
+// The DB layer reads HOME at module-load time when computing FRIDAY_DB_PATH.
+// Override before importing anything from @friday/shared.
+const tmpHome = mkdtempSync(join(tmpdir(), "friday-usage-test-"));
+process.env.HOME = tmpHome;
 
-vi.mock("@friday/shared", () => ({
-  USAGE_LOG_PATH: logPath,
-}));
-
-// Must import after mock
-const { logUsage } = await import("./usage.js");
+const { logUsage, migrateUsageLog } = await import("./usage.js");
+const { getRawDb, closeDb, USAGE_LOG_PATH } = await import("@friday/shared");
 
 function makeEntry(overrides: Record<string, unknown> = {}) {
   return {
@@ -30,47 +28,101 @@ function makeEntry(overrides: Record<string, unknown> = {}) {
   };
 }
 
+afterAll(() => {
+  closeDb();
+  rmSync(tmpHome, { recursive: true, force: true });
+});
+
 describe("logUsage", () => {
   beforeEach(() => {
-    // Create both testDir and the logs subdirectory.
-    // The module caches an `initialized` flag, so ensureLogDir is a no-op
-    // after the first call — we must pre-create the parent dir ourselves.
-    mkdirSync(join(testDir, "logs"), { recursive: true });
+    getRawDb().exec("DELETE FROM usage");
   });
 
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it("creates log directory and writes entry", () => {
+  it("inserts a row into the usage table", () => {
     logUsage(makeEntry());
 
-    expect(existsSync(logPath)).toBe(true);
-    const lines = readFileSync(logPath, "utf-8").trim().split("\n");
-    expect(lines).toHaveLength(1);
-    const parsed = JSON.parse(lines[0]);
-    expect(parsed.channelId).toBe("C123");
-    expect(parsed.inputTokens).toBe(100);
+    const rows = getRawDb()
+      .prepare("SELECT channel_id AS channelId, input_tokens AS inputTokens FROM usage")
+      .all() as Array<{ channelId: string; inputTokens: number }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].channelId).toBe("C123");
+    expect(rows[0].inputTokens).toBe(100);
   });
 
-  it("appends multiple entries", () => {
+  it("inserts multiple rows", () => {
     logUsage(makeEntry({ sessionId: "sess-1" }));
     logUsage(makeEntry({ sessionId: "sess-2" }));
 
-    const lines = readFileSync(logPath, "utf-8").trim().split("\n");
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]).sessionId).toBe("sess-1");
-    expect(JSON.parse(lines[1]).sessionId).toBe("sess-2");
+    const rows = getRawDb()
+      .prepare("SELECT session_id AS sessionId FROM usage ORDER BY id")
+      .all() as Array<{ sessionId: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].sessionId).toBe("sess-1");
+    expect(rows[1].sessionId).toBe("sess-2");
   });
 
-  it("preserves all fields in JSON output", () => {
-    const entry = makeEntry({ costUsd: null, turnNumber: 3 });
-    logUsage(entry);
+  it("preserves nullable fields", () => {
+    logUsage(makeEntry({ costUsd: null, turnNumber: 3 }));
 
-    const parsed = JSON.parse(readFileSync(logPath, "utf-8").trim());
-    expect(parsed.costUsd).toBeNull();
-    expect(parsed.turnNumber).toBe(3);
-    expect(parsed.sessionType).toBe("orchestrator");
-    expect(parsed.durationMs).toBe(1500);
+    const row = getRawDb()
+      .prepare(
+        "SELECT cost_usd AS costUsd, turn_number AS turnNumber, session_type AS sessionType, duration_ms AS durationMs FROM usage",
+      )
+      .get() as {
+      costUsd: number | null;
+      turnNumber: number;
+      sessionType: string;
+      durationMs: number;
+    };
+    expect(row.costUsd).toBeNull();
+    expect(row.turnNumber).toBe(3);
+    expect(row.sessionType).toBe("orchestrator");
+    expect(row.durationMs).toBe(1500);
+  });
+
+  it("stores provided agentName", () => {
+    logUsage(makeEntry({ sessionId: "sess-x" }), "research-bot");
+
+    const row = getRawDb()
+      .prepare("SELECT agent_name AS agentName FROM usage WHERE session_id = ?")
+      .get("sess-x") as { agentName: string | null };
+    expect(row.agentName).toBe("research-bot");
+  });
+});
+
+describe("migrateUsageLog", () => {
+  beforeEach(() => {
+    getRawDb().exec("DELETE FROM usage");
+  });
+
+  it("imports a JSONL file then renames it", async () => {
+    const lines = [
+      makeEntry({ sessionId: "sess-a" }),
+      makeEntry({ sessionId: "sess-b" }),
+    ]
+      .map((e) => JSON.stringify(e))
+      .join("\n");
+    writeFileSync(USAGE_LOG_PATH, lines + "\n");
+
+    await migrateUsageLog();
+
+    const count = getRawDb()
+      .prepare("SELECT COUNT(*) AS n FROM usage")
+      .get() as { n: number };
+    expect(count.n).toBe(2);
+    expect(existsSync(USAGE_LOG_PATH)).toBe(false);
+  });
+
+  it("skips when usage table is non-empty", async () => {
+    logUsage(makeEntry({ sessionId: "already-here" }));
+    writeFileSync(USAGE_LOG_PATH, JSON.stringify(makeEntry({ sessionId: "extra" })) + "\n");
+
+    await migrateUsageLog();
+
+    const count = getRawDb()
+      .prepare("SELECT COUNT(*) AS n FROM usage")
+      .get() as { n: number };
+    expect(count.n).toBe(1);
+    expect(existsSync(USAGE_LOG_PATH)).toBe(true);
   });
 });

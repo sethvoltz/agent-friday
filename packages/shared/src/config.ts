@@ -1,5 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
 export const FRIDAY_DIR = join(homedir(), ".friday");
@@ -8,6 +8,8 @@ export const ENV_PATH = join(FRIDAY_DIR, ".env");
 export const SESSIONS_DIR = join(FRIDAY_DIR, "sessions");
 export const USAGE_LOG_PATH = join(FRIDAY_DIR, "usage.jsonl");
 export const DAEMON_LOG_PATH = join(FRIDAY_DIR, "daemon.jsonl");
+export const EVOLVE_DIR = join(FRIDAY_DIR, "evolve");
+export const FEEDBACK_LOG_PATH = join(EVOLVE_DIR, "feedback.jsonl");
 
 export interface SlackConfig {
   orchestratorChannelId: string;
@@ -26,6 +28,11 @@ export interface EmojiConfig {
   queued: string;
   error: string;
   complete: string | null;
+  thinking: string;
+  toolCoding: string;
+  toolWeb: string;
+  toolGeneric: string;
+  compacting: string;
 }
 
 export interface SlackFormattingConfig {
@@ -44,6 +51,13 @@ export interface EventServerConfig {
   port: number;
 }
 
+export interface EvolveConfig {
+  /** Score (0-100) at or above which a proposal is promoted to "critical". */
+  criticalScore: number;
+  /** Signal frequency at or above which a proposal is promoted to "critical". */
+  criticalFrequency: number;
+}
+
 export interface FridayConfig {
   slack: SlackConfig;
   agent: AgentConfig;
@@ -51,6 +65,7 @@ export interface FridayConfig {
   slack_formatting: SlackFormattingConfig;
   monitoring: MonitoringConfig;
   eventServer: EventServerConfig;
+  evolve: EvolveConfig;
 }
 
 const DEFAULT_CONFIG: FridayConfig = {
@@ -76,6 +91,11 @@ const DEFAULT_CONFIG: FridayConfig = {
       queued: "clock1",
       error: "x",
       complete: null,
+      thinking: "thinking_face",
+      toolCoding: "technologist",
+      toolWeb: "zap",
+      toolGeneric: "fire",
+      compacting: "writing_hand",
     },
   },
   monitoring: {
@@ -84,6 +104,10 @@ const DEFAULT_CONFIG: FridayConfig = {
   },
   eventServer: {
     port: 7444,
+  },
+  evolve: {
+    criticalScore: 80,
+    criticalFrequency: 5,
   },
 };
 
@@ -109,5 +133,27 @@ export function loadConfig(): FridayConfig {
     },
     monitoring: { ...DEFAULT_CONFIG.monitoring, ...userConfig.monitoring },
     eventServer: { ...DEFAULT_CONFIG.eventServer, ...userConfig.eventServer },
+    evolve: { ...DEFAULT_CONFIG.evolve, ...userConfig.evolve },
   };
+}
+
+/**
+ * Read whatever's currently on disk at CONFIG_PATH (raw, no defaults applied).
+ * Returns {} when the file doesn't exist. Used by the evolve auto-apply path
+ * so we merge into the user's actual config rather than into defaults — that
+ * way the rewritten file doesn't suddenly grow every default field.
+ */
+export function readRawConfig(): Partial<FridayConfig> {
+  if (!existsSync(CONFIG_PATH)) return {};
+  return JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as Partial<FridayConfig>;
+}
+
+/**
+ * Write the user's config back to CONFIG_PATH. The caller is responsible for
+ * supplying a fully-formed object — this function does not merge defaults.
+ * Creates the directory if it doesn't exist.
+ */
+export function writeConfig(config: Partial<FridayConfig>): void {
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
 }

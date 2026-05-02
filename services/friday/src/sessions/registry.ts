@@ -1,30 +1,38 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import {
   AGENTS_PATH,
+  SCHEDULES_DIR,
+  atomicWriteFileSync,
   type AgentRegistry,
   type RegistryEntry,
   type AgentStatus,
   type BuilderEntry,
   type HelperEntry,
   type OrchestratorEntry,
+  type ScheduledEntry,
+  type ScheduleSpec,
   isValidAgentName,
 } from "@friday/shared";
+import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { log } from "../log.js";
 import { eventBus } from "../events/bus.js";
 
 let registry: AgentRegistry = {};
 
 export function loadRegistry(): void {
-  if (existsSync(AGENTS_PATH)) {
-    registry = JSON.parse(readFileSync(AGENTS_PATH, "utf-8"));
-    log("info", "registry_loaded", {
-      count: Object.keys(registry).length,
-    });
-  }
+  if (!existsSync(AGENTS_PATH)) return;
+  const text = readFileSync(AGENTS_PATH, "utf-8");
+  // Throw on parse failure — better to crash on startup than to silently overwrite
+  // the registry with `{}` on the next save (which would be total data loss).
+  registry = JSON.parse(text);
+  log("info", "registry_loaded", {
+    count: Object.keys(registry).length,
+  });
 }
 
 function saveRegistry(): void {
-  writeFileSync(AGENTS_PATH, JSON.stringify(registry, null, 2));
+  atomicWriteFileSync(AGENTS_PATH, JSON.stringify(registry, null, 2));
 }
 
 export function getAgent(name: string): RegistryEntry | undefined {
@@ -156,6 +164,83 @@ export function registerHelper(
   return entry;
 }
 
+export function registerScheduledAgent(
+  name: string,
+  schedule: ScheduleSpec,
+  taskPrompt: string,
+  cwd: string,
+  nextRunAt: string | null,
+  systemPromptSuffix?: string
+): ScheduledEntry {
+  if (!isValidAgentName(name)) {
+    throw new Error(`Invalid agent name: "${name}"`);
+  }
+  const existing = registry[name];
+  if (existing) {
+    throw new Error(
+      `Agent name "${name}" is already taken (status: ${existing.status}). Choose a more descriptive, unique name.`
+    );
+  }
+
+  const stateDir = join(SCHEDULES_DIR, name);
+  mkdirSync(stateDir, { recursive: true });
+
+  const entry: ScheduledEntry = {
+    type: "scheduled",
+    sessionId: null,
+    status: "idle",
+    createdAt: new Date().toISOString(),
+    schedule,
+    taskPrompt,
+    cwd,
+    stateDir,
+    lastRunAt: null,
+    nextRunAt,
+    paused: false,
+  };
+
+  if (systemPromptSuffix) {
+    entry.systemPromptSuffix = systemPromptSuffix;
+  }
+
+  registry[name] = entry;
+  saveRegistry();
+  eventBus.publish({ type: "agent:created", agentName: name, entry });
+  log("info", "agent_registered", { name, type: "scheduled" });
+  return entry;
+}
+
+/** Maximum number of previous taskPrompts to keep, supporting schedule_revert. */
+const FORMER_TASK_PROMPT_CAP = 10;
+
+export function updateScheduledAgent(
+  name: string,
+  updates: Partial<Pick<ScheduledEntry, "schedule" | "taskPrompt" | "nextRunAt" | "lastRunAt" | "paused" | "systemPromptSuffix" | "sessionId" | "formerSessionIds" | "formerTaskPrompts">>
+): void {
+  const entry = registry[name];
+  if (!entry || entry.type !== "scheduled") {
+    throw new Error(`Scheduled agent "${name}" not found`);
+  }
+
+  // Archive prior taskPrompt when it actually changes. Caller can also pass
+  // formerTaskPrompts directly (schedule_revert does this) — only auto-archive
+  // when the caller didn't explicitly set the history field.
+  if (
+    updates.taskPrompt !== undefined &&
+    updates.taskPrompt !== entry.taskPrompt &&
+    updates.formerTaskPrompts === undefined
+  ) {
+    const history = [entry.taskPrompt, ...(entry.formerTaskPrompts ?? [])].slice(
+      0,
+      FORMER_TASK_PROMPT_CAP
+    );
+    entry.formerTaskPrompts = history;
+  }
+
+  Object.assign(entry, updates);
+  saveRegistry();
+}
+
 export function updateAgentSession(
   name: string,
   sessionId: string
@@ -191,17 +276,19 @@ export function destroyAgent(name: string): void {
     throw new Error(`Cannot destroy the Orchestrator`);
   }
 
-  // Recursively destroy children first
+  // Recursively destroy children first (scheduled agents have no children)
   if ("children" in entry) {
     for (const childName of [...entry.children]) {
       destroyAgent(childName);
     }
   }
 
-  // Remove from parent's children list
-  const parentEntry = registry[entry.parent];
-  if (parentEntry && "children" in parentEntry) {
-    parentEntry.children = parentEntry.children.filter((c) => c !== name);
+  // Remove from parent's children list (scheduled agents have no parent)
+  if ("parent" in entry) {
+    const parentEntry = registry[entry.parent];
+    if (parentEntry && "children" in parentEntry) {
+      parentEntry.children = parentEntry.children.filter((c) => c !== name);
+    }
   }
 
   entry.status = "destroyed";
