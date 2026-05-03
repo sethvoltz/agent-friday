@@ -53,6 +53,7 @@ import { buildLinearMcpServer } from "../linear/mcp.js";
 import { LINEAR_MCP_NAME } from "../linear/constants.js";
 import { logFeedback } from "./feedback.js";
 import { getByThread, touchActivity } from "./thread-registry.js";
+import { createThreadTools } from "./thread-tools.js";
 import { mailSend } from "../comms/mail.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
@@ -624,6 +625,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 defaultCwd: config.agent.workingDirectory,
               }),
               "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
+              "friday-threads": createThreadTools(client),
             };
             const baseBare = {
               "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),

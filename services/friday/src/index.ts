@@ -29,6 +29,8 @@ import { createScheduleTools } from "./scheduler/schedule-tools.js";
 import { seedScheduledMetaAgents } from "./evolve/seed.js";
 import { createEvolveTools } from "./evolve/evolve-tools.js";
 import { reconcileLinearTickets } from "./linear/reconcile.js";
+import { initThreadRegistry } from "./slack/thread-registry.js";
+import { createThreadTools } from "./slack/thread-tools.js";
 
 async function main() {
   const startTime = Date.now();
@@ -131,6 +133,23 @@ async function main() {
     botUserId,
   });
 
+  // Initialize thread registry: recovers live connections from SQLite and prunes
+  // expired ones. Must run after slackPreflight so the Slack client is ready.
+  initThreadRegistry({
+    onIdleDisconnect: async (conn) => {
+      await app.client.chat
+        .postMessage({
+          channel: conn.channelId,
+          text: "Disconnected (idle timeout).",
+          thread_ts: conn.threadTs,
+        })
+        .catch(() => {});
+      await app.client.reactions
+        .remove({ channel: conn.channelId, timestamp: conn.threadTs, name: "link" })
+        .catch(() => {});
+    },
+  });
+
   // Mail poller: when agents mail the orchestrator, enqueue a turn through
   // the per-channel turn-queue so it serializes against in-flight Slack turns.
   // Building the prompt inside run() (not at notify time) keeps the mailbox
@@ -185,6 +204,7 @@ async function main() {
                   defaultCwd: config.agent.workingDirectory,
                 }),
                 "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
+                "friday-threads": createThreadTools(app.client),
               },
               systemPrompt: buildSystemPrompt(
                 config,
