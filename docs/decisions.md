@@ -521,3 +521,37 @@ The MCP server name `"friday-evolve"` is **preserved** (it's a tool-call namespa
 - **Existing in-flight Beads epics** are not auto-migrated; a one-time script (`scripts/migrate-beads-to-linear.ts`, run separately at cutover, not shipped) ports active beads epics to Linear Backlog. Closed beads epics stay as historical record.
 - **Linear team config:** `FRIDAY_TEAM_ID` is hardcoded in `@friday/shared/src/linear.ts`. Acceptable because Friday's Linear team is a single shared workspace per install; changing it would be a deliberate operational decision.
 
+## ADR-027: Thread Connections in Existing SQLite DB (Not a Separate File)
+
+**Status:** Accepted
+
+**Context:** The thread-linking feature needs to persist active Slack thread ↔ agent connections across daemon restarts and support two lookup patterns efficiently: by `agent_name` (to check what thread an agent is connected to) and by `thread_ts` (to route incoming thread messages to the right agent). A 2-hour idle timeout also requires storing `last_activity_at` to recover remaining timer duration on restart.
+
+The options were:
+1. A new separate SQLite file (`~/.friday/threads.db`) with a direct `better-sqlite3` client
+2. A JSON file (`~/.friday/threads.json`) with in-memory maps + periodic flush
+3. Add a `thread_connections` table to the existing `~/.friday/friday.db` via Drizzle
+
+**Decision:** Add `thread_connections` to the existing `friday.db` using a Drizzle schema addition and generated migration. No new packages, no new database file.
+
+```sql
+CREATE TABLE thread_connections (
+  agent_name      TEXT PRIMARY KEY,  -- enforces one thread per agent
+  channel_id      TEXT NOT NULL,
+  thread_ts       TEXT NOT NULL UNIQUE,  -- enforces one agent per thread
+  last_activity_at INTEGER NOT NULL, -- Unix ms, for idle-timer recovery on restart
+  created_at      INTEGER NOT NULL
+);
+```
+
+**Reasons:**
+- `better-sqlite3` and Drizzle are already deps of `@friday/shared` — no install cost
+- The DB's WAL mode, foreign-key enforcement, and `busy_timeout` are already configured
+- Drizzle's `drizzle-kit generate` + `runMigrations()` on boot is the established pattern — zero ad-hoc SQL
+- A JSON file would require O(n) scans for `getByThread`, manual conflict resolution, and a mtime-based reconciler on restart — all complexity already solved by SQLite
+- `agent_name PRIMARY KEY` + `thread_ts UNIQUE` enforce the 0-or-1 constraint at the DB level, not just in application code
+
+**Consequences:**
+- `thread_connections` is visible in the dashboard's DB alongside usage/memories. This is acceptable — it's operational data with the same access pattern.
+- The `initThreadRegistry()` call at startup reads all rows, prunes expired ones (> 2h), and rebuilds in-memory maps. This is a sub-millisecond read at typical connection counts.
+- On forced disconnect or crash without cleanup, stale rows are pruned silently on next startup — no manual intervention needed.

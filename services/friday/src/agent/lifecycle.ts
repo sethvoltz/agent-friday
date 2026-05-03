@@ -27,6 +27,7 @@ import { recordActivity, clearActivity } from "../monitor/agent-health.js";
 import { recordTurnFiles, clearFileTracking } from "../monitor/file-tracker.js";
 import { eventBus } from "../events/bus.js";
 import type { WorkerCommand, WorkerEvent, WorkerSpawnOptions } from "./worker-protocol.js";
+import { mailSend } from "../comms/mail.js";
 
 // ── Worker path ────────────────────────────────────────────────────────────
 
@@ -275,6 +276,54 @@ export function isAgentRunning(name: string): boolean {
  */
 export function getAgentStallState(name: string): StallState | null {
   return runningAgents.get(name)?.stall ?? null;
+}
+
+// ── Thread connection notifications ──────────────────────────────────────
+
+/**
+ * Notify an agent that a Slack thread has been connected to it.
+ * The agent will receive the channel_id and thread_ts and should use
+ * slack_reply with thread_ts to post directly into the thread.
+ */
+export function notifyThreadConnect(
+  agentName: string,
+  channelId: string,
+  threadTs: string
+): void {
+  mailSend({
+    from: "orchestrator",
+    to: agentName,
+    subject: "Thread connected",
+    body: [
+      "A Slack thread has been connected to you for direct communication.",
+      "",
+      `channel_id: ${channelId}`,
+      `thread_ts: ${threadTs}`,
+      "",
+      "How to use:",
+      "- User messages from this thread arrive as mail with subject `[thread] <text>`.",
+      "- To reply into the thread: call `slack_reply` with the channel_id and thread_ts above.",
+      "  This posts directly to the user without routing through the Orchestrator.",
+      "- The idle timeout is 2 hours, reset by any message in either direction.",
+      "  If you go idle for 2 hours the connection is severed automatically.",
+    ].join("\n"),
+  });
+}
+
+/**
+ * Notify an agent that its Slack thread connection has been severed.
+ */
+export function notifyThreadDisconnect(agentName: string, reason: string): void {
+  mailSend({
+    from: "orchestrator",
+    to: agentName,
+    subject: "Thread disconnected",
+    body: [
+      `Your Slack thread connection has been severed (reason: ${reason}).`,
+      "",
+      "The thread link is gone. Resume communicating only through the Orchestrator via mail.",
+    ].join("\n"),
+  });
 }
 
 // ── Restore on daemon restart ─────────────────────────────────────────────

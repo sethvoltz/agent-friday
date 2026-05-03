@@ -52,6 +52,9 @@ import { createEvolveTools } from "../evolve/evolve-tools.js";
 import { buildLinearMcpServer } from "../linear/mcp.js";
 import { LINEAR_MCP_NAME } from "../linear/constants.js";
 import { logFeedback } from "./feedback.js";
+import { getByThread, touchActivity } from "./thread-registry.js";
+import { createThreadTools } from "./thread-tools.js";
+import { mailSend } from "../comms/mail.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -427,6 +430,29 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
     const ts = message.ts;
     const userId = message.user as string;
 
+    // Thread message routing: if this is a reply inside a connected thread,
+    // forward it directly to the connected agent and skip the orchestrator queue.
+    const msgThreadTs = rawMsg.thread_ts as string | undefined;
+    if (msgThreadTs && msgThreadTs !== ts) {
+      const threadConn = getByThread(msgThreadTs);
+      if (threadConn) {
+        mailSend({
+          from: "orchestrator",
+          to: threadConn.agentName,
+          subject: `[thread] ${text}`,
+          body: text,
+        });
+        touchActivity(threadConn.agentName);
+        // Show processing emoji briefly so the user knows the message was received
+        await client.reactions.add({ channel: channelId, timestamp: ts, name: emojis.processing }).catch(() => {});
+        setTimeout(() => {
+          client.reactions.remove({ channel: channelId, timestamp: ts, name: emojis.processing }).catch(() => {});
+        }, 3000);
+        return;
+      }
+      // Thread not connected — fall through to normal processing
+    }
+
     // Fetch image attachments (non-image files and download failures are skipped)
     const images = hasFiles
       ? await fetchSlackImages(rawMsg.files, config.slackBotToken)
@@ -599,6 +625,7 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
                 defaultCwd: config.agent.workingDirectory,
               }),
               "friday-evolve": createEvolveTools({ callerName: "orchestrator" }),
+              "friday-threads": createThreadTools(client),
             };
             const baseBare = {
               "friday-memory": createMemoryTools({ callerName: `bare-${channelId}` }),

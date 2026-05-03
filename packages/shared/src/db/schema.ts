@@ -81,9 +81,23 @@ export const dbMeta = sqliteTable("db_meta", {
   value: text("value").notNull(),
 });
 
+// ── Thread connections ───────────────────────────────────────────────────────
+// Bidirectional link between a Slack thread and a running agent.
+// Enforces 0-or-1: agent_name PK means one thread per agent; thread_ts UNIQUE
+// means one agent per thread. last_activity_at drives idle-timeout recovery.
+export const threadConnections = sqliteTable("thread_connections", {
+  agentName:      text("agent_name").primaryKey(),
+  channelId:      text("channel_id").notNull(),
+  threadTs:       text("thread_ts").notNull().unique(),
+  lastActivityAt: integer("last_activity_at").notNull(), // Unix ms
+  createdAt:      integer("created_at").notNull(),       // Unix ms
+});
+
 export type UsageRow = typeof usage.$inferSelect;
 export type UsageInsert = typeof usage.$inferInsert;
 export type MemoryRow = typeof memories.$inferSelect;
 export type MemoryInsert = typeof memories.$inferInsert;
 export type TranscriptIndexRow = typeof transcriptIndex.$inferSelect;
 export type TranscriptIndexInsert = typeof transcriptIndex.$inferInsert;
+export type ThreadConnectionRow = typeof threadConnections.$inferSelect;
+export type ThreadConnectionInsert = typeof threadConnections.$inferInsert;
