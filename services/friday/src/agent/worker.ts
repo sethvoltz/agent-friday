@@ -155,6 +155,7 @@ async function runAgentLoop(
     };
 
     try {
+      emit({ type: "query-started" });
       for await (const message of query({
         prompt: prompt!,
         options: sessionId ? { ...queryOptions, resume: sessionId } : queryOptions,

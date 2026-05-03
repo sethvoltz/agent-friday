@@ -127,6 +127,7 @@ describe("runHealthCheck — 3-condition IPC stall detection", () => {
       lastChunkAt: Date.now(),
       toolCallActive: false,
       waitingForMail: false,
+      queryInFlight: false,
       ...overrides,
     };
   }
@@ -175,6 +176,19 @@ describe("runHealthCheck — 3-condition IPC stall detection", () => {
 
     const issues = runHealthCheck(config);
     expect(issues).toHaveLength(0);
+  });
+
+  it("does NOT flag stall when query is in flight (silent planning phase)", () => {
+    const staleAt = Date.now() - 60_000;
+    const stallState = makeStallState({ lastChunkAt: staleAt, queryInFlight: true });
+    const config = makeConfig({
+      stallThresholdMs: 30_000,
+      getStallState: () => stallState,
+    });
+
+    const issues = runHealthCheck(config);
+    expect(issues).toHaveLength(0);
+    expect(mockMailSend).not.toHaveBeenCalled();
   });
 
   it("does NOT flag stall if chunk was recent (under threshold)", () => {

@@ -29,6 +29,8 @@ export interface AgentStallState {
   toolCallActive: boolean;
   /** Whether the agent is idle, waiting for mail */
   waitingForMail: boolean;
+  /** Whether a query() call is currently in flight (true from query-started until turn-complete) */
+  queryInFlight: boolean;
 }
 
 // ── Health check config ────────────────────────────────────────────────────
@@ -162,10 +164,11 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
         let logEvent = "agent_health_stalled";
 
         if (stallState) {
-          // IPC-based: check chunk heartbeat + tool/mail-wait flags
+          // IPC-based: check chunk heartbeat + tool/mail-wait/query-in-flight flags
           isStalled =
             !stallState.toolCallActive &&
             !stallState.waitingForMail &&
+            !stallState.queryInFlight &&
             now - stallState.lastChunkAt > config.stallThresholdMs;
           stalledSec = Math.round((now - stallState.lastChunkAt) / 1000);
           stallMessage = hasCompletedTurn

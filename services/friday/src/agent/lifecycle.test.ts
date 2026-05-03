@@ -412,6 +412,20 @@ describe("stall state tracking via IPC events", () => {
     expect(after).toBeGreaterThanOrEqual(before);
   });
 
+  it("sets queryInFlight=true on query-started, false on turn-complete", async () => {
+    mockRegistry.getAgent.mockReturnValue(null);
+    spawnBuilder("builder-query-inflight");
+    const child = mockProcesses[mockProcesses.length - 1];
+
+    expect(getAgentStallState("builder-query-inflight")!.queryInFlight).toBe(false);
+
+    child.simulateEvent({ type: "query-started" });
+    expect(getAgentStallState("builder-query-inflight")!.queryInFlight).toBe(true);
+
+    child.simulateEvent({ type: "turn-complete", sessionId: "sess-1" });
+    expect(getAgentStallState("builder-query-inflight")!.queryInFlight).toBe(false);
+  });
+
   it("updates lastChunkAt on api-active event (silent planning phase heartbeat)", async () => {
     mockRegistry.getAgent.mockReturnValue(null);
     spawnBuilder("builder-api-active");

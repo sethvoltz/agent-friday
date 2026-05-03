@@ -43,6 +43,8 @@ interface StallState {
   toolCallActive: boolean;
   /** Whether the worker is idle, waiting for mail (not a stall candidate) */
   waitingForMail: boolean;
+  /** Whether a query() call is in flight (true from query-started until turn-complete) */
+  queryInFlight: boolean;
 }
 
 interface RunningAgent {
@@ -362,6 +364,7 @@ function forkAgentProcess(spawnOptions: WorkerSpawnOptions): void {
     lastChunkAt: Date.now(),
     toolCallActive: false,
     waitingForMail: false,
+    queryInFlight: false,
   };
 
   // Forward mail-wakeup events to the child process via IPC
@@ -430,6 +433,13 @@ function handleWorkerEvent(
   const stall = running.stall;
 
   switch (event.type) {
+    case "query-started":
+      // query() entered — request is about to be sent; agent is definitely alive.
+      stall.queryInFlight = true;
+      stall.lastChunkAt = Date.now();
+      stall.waitingForMail = false;
+      break;
+
     case "chunk-received":
       stall.lastChunkAt = Date.now();
       stall.toolCallActive = false;
@@ -478,6 +488,7 @@ function handleWorkerEvent(
       stall.lastChunkAt = Date.now();
       stall.toolCallActive = false;
       stall.waitingForMail = false;
+      stall.queryInFlight = false;
       log("info", "agent_turn_complete", { agent: agentName, sessionId: event.sessionId });
       break;
 
@@ -495,6 +506,7 @@ function handleWorkerEvent(
       break;
 
     case "error":
+      stall.queryInFlight = false;
       log("error", "worker_reported_error", { agent: agentName, message: event.message });
       updateAgentStatus(agentName, "idle");
       break;
