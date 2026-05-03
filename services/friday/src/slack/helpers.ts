@@ -1,5 +1,6 @@
 import type { SessionType } from "@friday/shared";
 import type { RuntimeConfig } from "../config.js";
+import type { WebClient } from "@slack/web-api";
 import { buildAgentSystemPrompt } from "../agent/prime.js";
 import type { QueuedMessage, MultimodalPrompt } from "../sessions/queue.js";
 
@@ -206,6 +207,55 @@ export function isInterruptSignal(text: string): boolean {
 
   const falsePositive = INTERRUPT_FALSE_POSITIVE_RE.some((re) => re.test(trimmed));
   return !falsePositive;
+}
+
+// ── Slack reaction helpers ────────────────────────────────────────────────
+
+export type ReactionError = { type: "permanent" | "transient"; code: string };
+export type ReactionResult = { ok: true } | ({ ok: false } & ReactionError);
+
+const PERMANENT_CODES = new Set([
+  "message_not_found",
+  "channel_not_found",
+  "not_in_channel",
+  "already_reacted",
+  "no_reaction",
+  "invalid_name",
+]);
+
+function classifyReactionError(err: unknown): ReactionResult {
+  const code =
+    (err as any)?.data?.error ?? (err as any)?.code ?? String(err);
+  const type = PERMANENT_CODES.has(code) ? "permanent" : "transient";
+  return { ok: false, type, code };
+}
+
+export async function addReaction(
+  client: WebClient,
+  channel: string,
+  ts: string,
+  name: string
+): Promise<ReactionResult> {
+  try {
+    await client.reactions.add({ channel, timestamp: ts, name });
+    return { ok: true };
+  } catch (err) {
+    return classifyReactionError(err);
+  }
+}
+
+export async function removeReaction(
+  client: WebClient,
+  channel: string,
+  ts: string,
+  name: string
+): Promise<ReactionResult> {
+  try {
+    await client.reactions.remove({ channel, timestamp: ts, name });
+    return { ok: true };
+  } catch (err) {
+    return classifyReactionError(err);
+  }
 }
 
 /**

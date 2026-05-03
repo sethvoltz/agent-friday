@@ -317,6 +317,19 @@ Use Slack mrkdwn — *bold*, \`code\`, bullet lists with •. NOT Markdown heade
 - \`schedule_create\` / \`schedule_list\` / \`schedule_show\` / \`schedule_preview\` / \`schedule_pause\` / \`schedule_resume\` / \`schedule_update\` / \`schedule_revert\` / \`schedule_delete\` / \`schedule_trigger\` — manage scheduled agents that run autonomously on cron schedules or one-shot timers. Scheduled agents do their work without your involvement, but can escalate to you via mail if they hit issues.
 - \`evolve_list\` / \`evolve_show\` / \`evolve_approve\` / \`evolve_reject\` / \`evolve_summarize_critical\` — the self-improvement backlog (see "Improvements backlog" below).
 
+## Thread connections
+
+A thread connection links a Slack thread directly to a running Builder or Helper, letting the user converse with the agent without routing every message through you.
+
+- \`thread_connect(agent_name, channel_id, thread_ts, anchor_ts)\` — connects a Slack thread to an agent. \`anchor_ts\` is the message ts where the \`:link:\` reaction appears (usually the same as \`thread_ts\`). Posts a confirmation in the thread and mails the agent its connection details. Use when the user asks to "connect" or "link" a thread to an agent.
+- \`thread_disconnect(agent_name)\` — severs the connection, removes the \`:link:\` reaction, and notifies the agent.
+
+Constraints:
+- An agent can only be connected to one thread at a time. Connecting to a second thread auto-disconnects the first (the old thread gets a notice).
+- A thread can only be connected to one agent. Attempting to connect a thread already owned by a different agent returns an error — disconnect the current owner first.
+
+Once connected, messages the user posts in that thread are forwarded directly to the agent as mail (subject: \`[thread] <text>\`). The agent replies via \`slack_reply\` with \`thread_ts\`, bypassing you. The connection idles out after 2 hours of inactivity.
+
 ## Improvements backlog
 
 A scheduled meta-agent (\`scheduled-meta-daily\`) scans Friday's own logs and writes proposed improvements to a backlog at \`~/.friday/evolve/proposals/\`. Each proposal is one of: \`memory\` (a lesson to remember), \`prompt\`/\`config\` (a tweak to your own brain), or \`code\` (work for a Builder).
@@ -437,7 +450,15 @@ You cannot talk to the user. ALL communication goes through mail to the Orchestr
 - \`gh\` — GitHub operations (auth handled). Only use after receiving push approval.
 - \`bd\` — task tracking. All commands: \`cd ${BEADS_DIR} && bd ...\`
 - \`agent_create\` — spawn Helpers (not Builders) for subtasks
-- Work exclusively within your workspace worktree. Commit locally and often. Do not push until told to.`;
+- Work exclusively within your workspace worktree. Commit locally and often. Do not push until told to.
+
+## Thread connection
+
+You may be connected to a Slack thread for direct communication with the user. If so, you will receive a mail with subject **"Thread connected"** containing the \`channel_id\` and \`thread_ts\` for that thread.
+
+- User messages from the thread arrive as mail with subject **\`[thread] <text>\`**. Handle them promptly — the idle timeout is 2 hours (reset by any message in either direction).
+- To reply into the thread: call \`slack_reply\` with \`channel_id\` and \`thread_ts\`. This bypasses the Orchestrator and posts directly to the user.
+- When you receive mail with subject **"Thread disconnected"**, the thread link is gone — resume communicating only through the Orchestrator.`;
 }
 
 // ── Helper ──────────────────────────────────────────────────────
@@ -480,6 +501,14 @@ Include a summary of what you did and any issues encountered.
 - \`mail_send\` / \`mail_check\` / \`mail_read\` / \`mail_close\` — talk to your parent
 - You cannot create other agents
 - You cannot talk to the user
+
+## Thread connection
+
+You may be connected to a Slack thread for direct communication with the user. If so, you will receive a mail with subject **"Thread connected"** containing the \`channel_id\` and \`thread_ts\` for that thread.
+
+- User messages from the thread arrive as mail with subject **\`[thread] <text>\`**. Handle them promptly — the idle timeout is 2 hours (reset by any message in either direction).
+- To reply into the thread: call \`slack_reply\` with \`channel_id\` and \`thread_ts\`. This bypasses your parent and posts directly to the user.
+- When you receive mail with subject **"Thread disconnected"**, the thread link is gone — resume communicating only through your parent.
 
 ## Tools
 
