@@ -161,6 +161,15 @@ async function runAgentLoop(
       })) {
         if (signal.aborted) break;
 
+        // SDK status 'requesting' → API call in flight (model thinking, no output yet)
+        if (
+          message.type === "system" &&
+          (message as any).subtype === "status" &&
+          (message as any).status === "requesting"
+        ) {
+          emit({ type: "api-active" });
+        }
+
         // Text output → chunk heartbeat (also ends any pending tool)
         if (message.type === "assistant") {
           const text = message.message.content

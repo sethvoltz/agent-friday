@@ -436,6 +436,14 @@ function handleWorkerEvent(
       stall.waitingForMail = false;
       break;
 
+    case "api-active":
+      // API call is in flight — model is thinking but no output yet.
+      // Resets the stall timer so the silent planning phase doesn't trigger alerts.
+      stall.lastChunkAt = Date.now();
+      stall.toolCallActive = false;
+      stall.waitingForMail = false;
+      break;
+
     case "tool-start":
       stall.toolCallActive = true;
       stall.waitingForMail = false;

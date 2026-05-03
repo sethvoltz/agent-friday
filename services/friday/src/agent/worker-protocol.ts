@@ -36,6 +36,12 @@ export interface WorkerSpawnOptions {
 export type WorkerEvent =
   /** A text chunk was received from the SDK stream — proves forward progress */
   | { type: "chunk-received" }
+  /**
+   * SDK emitted `status: 'requesting'` — an API call is now in flight.
+   * This fires before any chunks arrive, covering the silent planning/thinking
+   * phase where the model is working but producing no output yet.
+   */
+  | { type: "api-active" }
   /** A tool call has started; the agent is now executing a tool */
   | { type: "tool-start"; toolName: string }
   /** A tool call has finished; the tool result was returned to the model */
