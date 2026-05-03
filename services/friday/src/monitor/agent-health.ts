@@ -40,9 +40,11 @@ export interface HealthCheckConfig {
    */
   stallThresholdMs: number;
   /**
-   * How long after spawn before a 0-turn agent can be flagged as stalled.
-   * Prevents false-positive alerts during silent planning/thinking phases.
-   * Defaults to stallThresholdMs when not set.
+   * How long after spawn before stall detection activates.
+   * Builders spend 60–120s in a silent planning phase (reading the epic,
+   * calling Linear, creating tasks) before sending any IPC events — without
+   * a grace period the 30s stall threshold fires false positives.
+   * Default: 2 minutes.
    */
   startupGracePeriodMs?: number;
   /** How often to run the health check. Default: 60 seconds. */
@@ -58,6 +60,7 @@ export interface HealthCheckConfig {
 
 const DEFAULT_CONFIG: HealthCheckConfig = {
   stallThresholdMs: 30_000,
+  startupGracePeriodMs: 2 * 60 * 1000, // 2 minutes
   intervalMs: 60_000,
   isAgentRunning: () => false,
 };
@@ -83,6 +86,7 @@ export function startAgentHealthCheck(config?: Partial<HealthCheckConfig>): void
 
   log("info", "agent_health_check_started", {
     stallThresholdMs: currentConfig.stallThresholdMs,
+    startupGracePeriodMs: currentConfig.startupGracePeriodMs,
     intervalMs: currentConfig.intervalMs,
   });
 }
@@ -140,7 +144,7 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
 
     // ── Stall detection ──────────────────────────────────────────────────
     if (entry.status === "active" && loopRunning) {
-      const gracePeriodMs = config.startupGracePeriodMs ?? config.stallThresholdMs;
+      const gracePeriodMs = config.startupGracePeriodMs ?? 2 * 60 * 1000;
       const createdAtMs = new Date(entry.createdAt).getTime();
       const lastTs = getLastActivity(name);
       const hasCompletedTurn = lastTs !== null;
