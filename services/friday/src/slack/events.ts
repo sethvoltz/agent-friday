@@ -55,6 +55,7 @@ import { logFeedback } from "./feedback.js";
 import { getByThread, touchActivity } from "./thread-registry.js";
 import { createThreadTools } from "./thread-tools.js";
 import { mailSend } from "../comms/mail.js";
+import { getSkillRegistry } from "../skills/registry.js";
 
 export function registerEventHandlers(app: App, config: RuntimeConfig): void {
   const orchestratorChannelId = config.slack.orchestratorChannelId;
@@ -347,7 +348,10 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
           "• `/friday agents` — List active agents (with stall indicators)\n" +
           "• `/friday kill <agent>` — Force-kill a running agent (workspace preserved)\n" +
           "• `/friday inspect <agent>` — Inspect agent's recent transcript\n" +
-          "• `/friday help` — Show this message"
+          "• `/friday help` — Show this message\n" +
+          "\n" +
+          "*Skills:*\n" +
+          "• `@friday /skill-name [args]` — Invoke a skill directly by name (e.g. `@friday /review`, `@friday /grill-me`)"
       );
     } else {
       await respond(`Unknown command: \`${args}\`. Try \`/friday help\`.`);
@@ -476,6 +480,57 @@ export function registerEventHandlers(app: App, config: RuntimeConfig): void {
       interrupt: sessionType === "orchestrator" && isInterruptSignal(text),
       threadTs: msgThreadTs && msgThreadTs !== ts ? msgThreadTs : undefined,
     };
+
+    // Explicit skill invocation: "@friday /skill-name [args]"
+    // Strip any leading Slack mention (e.g. <@U0ABC123>) and check for /skill-name
+    const strippedText = text.replace(/^<@[A-Z0-9]+>\s*/i, "").trim();
+    const skillInvoke = /^\/([a-z][\w-]*)(?:\s+([\s\S]*))?$/i.exec(strippedText);
+    if (skillInvoke) {
+      const skillName = skillInvoke[1].toLowerCase();
+      const skillArgs = skillInvoke[2]?.trim() ?? "";
+      const registry = getSkillRegistry();
+      const skill = registry?.getByName(skillName);
+      if (skill) {
+        const currentScopeMatches =
+          skill.scope.length === 0 || skill.scope.includes(sessionType as any);
+
+        if (!currentScopeMatches) {
+          // Skill is not meant for orchestrator — try routing to an active scoped agent
+          const scopeTypes = new Set(skill.scope);
+          const target = listAgents().find(
+            ({ entry }) =>
+              entry.status === "active" &&
+              scopeTypes.has(entry.type as any)
+          );
+          if (target) {
+            const body = skillArgs
+              ? `${skill.body}\n\n${skillArgs}`
+              : skill.body;
+            mailSend({
+              from: "orchestrator",
+              to: target.name,
+              subject: `[skill] /${skillName}`,
+              body,
+            });
+            log("info", "skill_dispatched_to_agent", {
+              skill: skillName,
+              agent: target.name,
+            });
+            await client.chat.postMessage({
+              channel: channelId,
+              text: `Dispatching \`/${skillName}\` to *${target.name}*…`,
+            });
+            return;
+          }
+          // No matching active agent — fall through and run locally anyway
+        }
+
+        // Run the skill locally: inject body into the queued message
+        queuedMsg.skillBody = skill.body;
+        queuedMsg.text = skillArgs;
+        log("info", "skill_invoked_locally", { skill: skillName, channelId });
+      }
+    }
 
     enqueue(queuedMsg);
 

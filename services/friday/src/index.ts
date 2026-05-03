@@ -31,6 +31,7 @@ import { createEvolveTools } from "./evolve/evolve-tools.js";
 import { reconcileLinearTickets } from "./linear/reconcile.js";
 import { initThreadRegistry } from "./slack/thread-registry.js";
 import { createThreadTools } from "./slack/thread-tools.js";
+import { initSkillRegistry } from "./skills/registry.js";
 
 async function main() {
   const startTime = Date.now();
@@ -46,6 +47,7 @@ async function main() {
   log("info", "memory_reconciled", memReconcile);
   loadSessions();
   loadRegistry();
+  initSkillRegistry();
   initOrchestrator();
   log("info", "config_loaded", {
     orchestratorChannelId: config.slack.orchestratorChannelId,

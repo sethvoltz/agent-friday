@@ -2,6 +2,7 @@ import type { SessionType } from "@friday/shared";
 import type { RuntimeConfig } from "../config.js";
 import type { WebClient } from "@slack/web-api";
 import { buildAgentSystemPrompt } from "../agent/prime.js";
+import { getSkillRegistry } from "../skills/registry.js";
 import type { QueuedMessage, MultimodalPrompt } from "../sessions/queue.js";
 
 export type { MultimodalPrompt };
@@ -24,10 +25,13 @@ export function buildSystemPrompt(
 
   // Typed sessions (orchestrator, builder, helper) get their role prime
   if (sessionType !== "bare") {
+    const registry = getSkillRegistry();
+    const skills = registry?.getAutoTriggerSkills(sessionType) ?? [];
     const prime = buildAgentSystemPrompt({
       agentName: sessionType === "orchestrator" ? "orchestrator" : `slack-${sessionType}`,
       agentType: sessionType,
       cwd,
+      skills,
     });
     const parts = [channelContext, prime];
     if (customPrompt) parts.push(customPrompt);
@@ -130,6 +134,9 @@ export function buildBatchDisplayText(messages: QueuedMessage[]): string {
  * When any message in the batch is flagged as an interrupt, the prompt is
  * prefixed with an [INTERRUPT] marker so the orchestrator knows to kill
  * active builders before starting new work.
+ *
+ * When the first message carries a skillBody, it is prepended to the text as
+ * the primary instructions; the remaining text becomes the user's specific request.
  */
 export function buildBatchContent(
   messages: QueuedMessage[]
@@ -138,16 +145,25 @@ export function buildBatchContent(
   const hasInterrupt = messages.some((m) => m.interrupt);
   const threadTs = messages.find((m) => m.threadTs)?.threadTs;
 
+  // Skill invocation: first message's skillBody becomes the primary prompt
+  const skillBody = messages[0]?.skillBody;
+  const userArgs = messages.map((m) => m.text.trim()).filter(Boolean).join("\n\n");
+  const skillText = skillBody
+    ? userArgs
+      ? `${skillBody}\n\n${userArgs}`
+      : skillBody
+    : null;
+
   const prefix =
     (threadTs ? `[Thread: ${threadTs}]\n\n` : "") +
     (hasInterrupt ? "[INTERRUPT] The user is redirecting the current task:\n\n" : "");
 
   if (allImages.length === 0) {
-    const textOnly = buildBatchPrompt(messages.map((m) => m.text));
+    const textOnly = skillText ?? buildBatchPrompt(messages.map((m) => m.text));
     return `${prefix}${textOnly}`;
   }
 
-  const rawText = buildBatchPrompt(messages.map((m) => m.text.trim() || "[image]"));
+  const rawText = skillText ?? buildBatchPrompt(messages.map((m) => m.text.trim() || "[image]"));
   return { text: `${prefix}${rawText}`, images: allImages };
 }
 

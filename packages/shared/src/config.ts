@@ -11,6 +11,7 @@ export const LOGS_DIR = join(FRIDAY_DIR, "logs");
 export const DAEMON_LOG_PATH = join(LOGS_DIR, "daemon.jsonl");
 export const EVOLVE_DIR = join(FRIDAY_DIR, "evolve");
 export const FEEDBACK_LOG_PATH = join(EVOLVE_DIR, "feedback.jsonl");
+export const SKILLS_DIR = join(FRIDAY_DIR, "skills");
 
 export function getLogPath(service: string): string {
   return join(LOGS_DIR, `${service}.jsonl`);
