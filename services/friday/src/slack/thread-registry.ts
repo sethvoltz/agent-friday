@@ -171,6 +171,12 @@ export function initThreadRegistry(opts: {
 }): void {
   _onIdleDisconnect = opts.onIdleDisconnect;
 
+  // Clear existing in-memory state before rebuilding from DB.
+  // This ensures a clean slate whether called at startup or in tests.
+  for (const conn of byAgent.values()) clearTimeout(conn.idleTimer);
+  byAgent.clear();
+  byThread.clear();
+
   const rows = getAllThreadConnections();
   const now = Date.now();
   let restored = 0;

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildSystemPrompt,
   chunkMessage,
@@ -8,6 +8,8 @@ import {
   buildSessionFields,
   buildBatchDisplayText,
   buildBatchContent,
+  addReaction,
+  removeReaction,
 } from "./helpers.js";
 import type { QueuedMessage } from "../sessions/queue.js";
 import type { RuntimeConfig } from "../config.js";
@@ -284,6 +286,84 @@ describe("buildBatchContent", () => {
     };
     expect(result.text).toBe("[image]");
     expect(result.images).toEqual([img]);
+  });
+});
+
+// ── Reaction helpers ─────────────────────────────────────────────────────
+
+function makeClient(overrides: Record<string, any> = {}) {
+  return {
+    reactions: {
+      add: vi.fn().mockResolvedValue({}),
+      remove: vi.fn().mockResolvedValue({}),
+      ...overrides,
+    },
+  } as any;
+}
+
+describe("addReaction", () => {
+  it("returns {ok: true} on success", async () => {
+    const client = makeClient();
+    const result = await addReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: true });
+    expect(client.reactions.add).toHaveBeenCalledWith({
+      channel: "C001",
+      timestamp: "111.222",
+      name: "link",
+    });
+  });
+
+  it("returns permanent error for message_not_found", async () => {
+    const client = makeClient({
+      add: vi.fn().mockRejectedValue({ data: { error: "message_not_found" } }),
+    });
+    const result = await addReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: false, type: "permanent", code: "message_not_found" });
+  });
+
+  it("returns permanent error for already_reacted", async () => {
+    const client = makeClient({
+      add: vi.fn().mockRejectedValue({ data: { error: "already_reacted" } }),
+    });
+    const result = await addReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: false, type: "permanent", code: "already_reacted" });
+  });
+
+  it("returns transient error for ratelimited", async () => {
+    const client = makeClient({
+      add: vi.fn().mockRejectedValue({ data: { error: "ratelimited" } }),
+    });
+    const result = await addReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: false, type: "transient", code: "ratelimited" });
+  });
+});
+
+describe("removeReaction", () => {
+  it("returns {ok: true} on success", async () => {
+    const client = makeClient();
+    const result = await removeReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: true });
+    expect(client.reactions.remove).toHaveBeenCalledWith({
+      channel: "C001",
+      timestamp: "111.222",
+      name: "link",
+    });
+  });
+
+  it("returns permanent error for no_reaction", async () => {
+    const client = makeClient({
+      remove: vi.fn().mockRejectedValue({ data: { error: "no_reaction" } }),
+    });
+    const result = await removeReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: false, type: "permanent", code: "no_reaction" });
+  });
+
+  it("returns transient error for request_timeout", async () => {
+    const client = makeClient({
+      remove: vi.fn().mockRejectedValue({ data: { error: "request_timeout" } }),
+    });
+    const result = await removeReaction(client, "C001", "111.222", "link");
+    expect(result).toEqual({ ok: false, type: "transient", code: "request_timeout" });
   });
 });
 
