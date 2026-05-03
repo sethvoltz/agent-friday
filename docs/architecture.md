@@ -56,6 +56,8 @@ The primary service. Connects to Slack via Socket Mode, routes messages to Agent
 | `src/evolve/evolve-tools.ts` | Evolve MCP tools (`evolve_list`, `evolve_show`, `evolve_approve`, `evolve_reject`, `evolve_summarize_critical`) for the orchestrator |
 | `src/slack/preflight.ts` | Boot-time Slack cleanup — patches interrupted messages and removes dangling emoji reactions from previous crashes |
 | `src/slack/image-fetch.ts` | Authenticated download of Slack private image files; returns base64-encoded `ImageAttachment[]` |
+| `src/slack/thread-registry.ts` | Thread connection persistence + lifecycle — in-memory maps (`agentName↔threadTs`), SQLite rows, 2-hour idle timers, startup recovery |
+| `src/slack/thread-tools.ts` | Orchestrator-only MCP tools: `thread_connect` / `thread_disconnect` — manages registry, `:link:` reaction, Slack posts, and agent mail |
 | `src/comms/mail.ts` | Beads-backed inter-agent mail system with push delivery via EventEmitter. Uses `execFileSync` (not shell) to avoid injection. |
 | `src/comms/mail-tools.ts` | Mail MCP tools (`mail_send`, `mail_check`, `mail_read`, `mail_close`) |
 | `src/comms/mail-poller.ts` | Polls for orchestrator mail and triggers turns via `sendToAgent` |
@@ -193,6 +195,23 @@ When the Agent SDK detects conversation compaction:
 4. Handler updates message to "🗜️ Conversation was compacted"
 ```
 
+### Thread Message Path
+
+When a Slack thread is connected to a Builder or Helper, messages in that thread bypass the orchestrator entirely:
+
+```
+1. User posts a reply in a thread that is connected to an agent
+2. events.ts detects thread_ts on the message event
+3. thread-registry.getByThread(thread_ts) returns the connected agent
+4. mailSend({ to: agentName, subject: '[thread] <text>', ... }) forwards the message
+5. touchActivity(agentName) resets the 2-hour idle timer
+6. :eyes: reaction added briefly for acknowledgment, removed after 3s
+7. Agent receives the mail and wakes up (mail-wakeup IPC)
+8. Agent calls slack_reply with channel_id + thread_ts to reply directly in thread
+```
+
+Thread replies from unconnected threads fall through to normal processing.
+
 ### Slash Commands
 
 | Command | Behavior |
@@ -299,6 +318,7 @@ the daemon and the dashboard process. Schema lives in
 | `memories` | Mirror of `memory/entries/*.md` plus DB-only `recall_count` / `last_recalled_at`. Backed by `memories_fts` (FTS5 virtual table) for keyword search. | `.md` files |
 | `transcript_index` | First/last timestamp + mtime per `~/.claude/projects/**/<sessionId>.jsonl`. Lets the dashboard avoid per-session partial reads. | SDK JSONL files |
 | `db_meta` | Generic key/value (e.g. `memories.last_reconciled_at`). | DB |
+| `thread_connections` | Active Slack thread ↔ agent links. `agent_name` PK + `thread_ts` UNIQUE enforces 0-or-1 at DB level. `last_activity_at` (Unix ms) drives idle-timeout recovery on restart. | DB |
 
 **Boundaries:** opaque operational data (usage rows) lives in the DB. User-
 editable files (`config.json`, `agents.json`, `*.md`) stay as files; the DB
@@ -530,7 +550,7 @@ pnpm --filter @friday/cli exec vitest run src/commands/start.test.ts
 | `@friday/memory` | `store.test.ts`, `search.test.ts` | Memory CRUD, serialization roundtrip, recall tracking, hybrid search scoring, tag filtering, recall frequency boosting, event logging |
 | `@friday/evolve` | `store.test.ts`, `scan.test.ts`, `rank.test.ts`, `propose.test.ts`, `clusters.test.ts`, `apply.test.ts` | Proposal CRUD + frontmatter roundtrip; deterministic scanners with `scheduled-meta-*` self-exclusion (daemon, feedback, usage spike, transcript retry); scoring + critical thresholds; merge-by-hash and rerank-all; Jaccard cluster merge with union-find; apply pipeline for memory/prompt/config/code (code dispatches via injected `bd` runner — asserts epic body, mail labels, error propagation, self-modification guard) |
 | `@friday/cli` | `help.test.ts`, `services.test.ts`, `state.test.ts`, `migrate.test.ts`, `tmux.ts` (no test — exec wrapper), `freshness.test.ts`, command tests for `start/stop/restart/status/attach/logs/reset-orchestrator/inspect/transcript/schedule/setup/usage/config/doctor` | Help text, state-backed PID management, isRunning, parseServiceArg, findMonorepoRoot, state file round-trip + atomicity, legacy pids → state migration with PID validation, prod artifact freshness check, full command surface including `--dev` paths, mode-preserving restart and assertion-flag rejection, four-state status with `--json` contract, log tail spanning rotated `.gz` siblings, attach error paths and crashed-pane notice, recovery hints |
-| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `workspace-guard.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `image-fetch.test.ts`, `agent-health.test.ts`, `file-tracker.test.ts`, `interrupt.test.ts`, `mail.test.ts`, `mail-poller.test.ts`, `lifecycle.test.ts`, `auto-recall.test.ts`, `events/bus.test.ts`, `events/server.test.ts`, `scheduler/scheduler.test.ts`, `scheduler/trigger.test.ts` | FIFO queue ops, session persistence, Slack helpers (including interrupt signal detection), usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, builder workspace path guard (PreToolCall hook), system prompt generation, thinking indicator and status callbacks, MCP agent tools (including `agent_kill`/`agent_refork`), boot preflight cleanup, Slack image fetch and base64 encoding, 3-condition IPC stall detection and crash detection, turn-scoped file tracking sliding window, mail CRUD and push/poll delivery, fork-based agent supervisor (spawn/kill/SIGKILL-fallback/refork/multi-agent isolation/daemon restart restore), memory auto-recall context block assembly, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay, scheduler check loop and cron parsing, scheduled agent triggering and state injection |
+| `@friday/daemon` | `queue.test.ts`, `manager.test.ts`, `helpers.test.ts`, `usage.test.ts`, `config.test.ts`, `registry.test.ts`, `workspace.test.ts`, `workspace-guard.test.ts`, `prime.test.ts`, `client.test.ts`, `agent-tools.test.ts`, `preflight.test.ts`, `image-fetch.test.ts`, `agent-health.test.ts`, `file-tracker.test.ts`, `interrupt.test.ts`, `mail.test.ts`, `mail-poller.test.ts`, `lifecycle.test.ts`, `auto-recall.test.ts`, `events/bus.test.ts`, `events/server.test.ts`, `scheduler/scheduler.test.ts`, `scheduler/trigger.test.ts`, `thread-registry.test.ts`, `thread-tools.test.ts` | FIFO queue ops, session persistence, Slack helpers (including interrupt signal detection, addReaction/removeReaction error classification), usage logging, runtime config, agent registry CRUD, workspace/worktree lifecycle, builder workspace path guard (PreToolCall hook), system prompt generation, thinking indicator and status callbacks, MCP agent tools (including `agent_kill`/`agent_refork`), boot preflight cleanup, Slack image fetch and base64 encoding, 3-condition IPC stall detection and crash detection, turn-scoped file tracking sliding window, mail CRUD and push/poll delivery, fork-based agent supervisor (spawn/kill/SIGKILL-fallback/refork/multi-agent isolation/daemon restart restore), memory auto-recall context block assembly, EventBus publish/replay/ring buffer, SSE server endpoints/streaming/reconnect replay, scheduler check loop and cron parsing, scheduled agent triggering and state injection, thread registry connect/disconnect/idle-timer/startup-recovery, thread_connect/thread_disconnect MCP tool handlers |
 
 ### Conventions
 
