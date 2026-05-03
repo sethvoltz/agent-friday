@@ -7,6 +7,7 @@ export default defineConfig({
 		external: ['better-sqlite3', 'bindings'],
 	},
 	server: {
+		host: true,
 		watch: {
 			ignored: ['**/docs/**', '**/services/friday/**', '**/packages/cli/**'],
 		},
