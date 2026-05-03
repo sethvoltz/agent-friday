@@ -39,6 +39,12 @@ export interface HealthCheckConfig {
    * before an agent is declared stalled. Default: 30 seconds.
    */
   stallThresholdMs: number;
+  /**
+   * How long after spawn before a 0-turn agent can be flagged as stalled.
+   * Prevents false-positive alerts during silent planning/thinking phases.
+   * Defaults to stallThresholdMs when not set.
+   */
+  startupGracePeriodMs?: number;
   /** How often to run the health check. Default: 60 seconds. */
   intervalMs: number;
   /** Returns true if an agent's worker process is running */
@@ -132,54 +138,67 @@ export function runHealthCheck(config: HealthCheckConfig): HealthIssue[] {
       notifiedCrashed.delete(name);
     }
 
-    // ── Stall detection (3-condition IPC-based) ──────────────────────────
-    if (entry.status === "active" && loopRunning && config.getStallState) {
-      const stallState = config.getStallState(name);
+    // ── Stall detection ──────────────────────────────────────────────────
+    if (entry.status === "active" && loopRunning) {
+      const gracePeriodMs = config.startupGracePeriodMs ?? config.stallThresholdMs;
+      const createdAtMs = new Date(entry.createdAt).getTime();
+      const lastTs = getLastActivity(name);
+      const hasCompletedTurn = lastTs !== null;
 
-      if (stallState) {
-        const isStalled =
-          !stallState.toolCallActive &&
-          !stallState.waitingForMail &&
-          now - stallState.lastChunkAt > config.stallThresholdMs;
+      // Skip stall detection for 0-turn agents still within the startup grace period.
+      // Builders in a silent planning/thinking phase produce no output but are working.
+      if (!hasCompletedTurn && now - createdAtMs <= gracePeriodMs) {
+        notifiedStalled.delete(name);
+      } else {
+        const stallState = config.getStallState?.(name) ?? null;
+
+        let isStalled = false;
+        let stalledSec = 0;
+        let stallMessage = "";
+        let logEvent = "agent_health_stalled";
+
+        if (stallState) {
+          // IPC-based: check chunk heartbeat + tool/mail-wait flags
+          isStalled =
+            !stallState.toolCallActive &&
+            !stallState.waitingForMail &&
+            now - stallState.lastChunkAt > config.stallThresholdMs;
+          stalledSec = Math.round((now - stallState.lastChunkAt) / 1000);
+          stallMessage = hasCompletedTurn
+            ? `Agent "${name}" (${entry.type}) stalled: no stream progress for ` +
+              `${stalledSec}s (no chunk, no active tool, not waiting for mail).`
+            : `Agent "${name}" (${entry.type}) has not completed any turns since spawning ` +
+              `${Math.round((now - createdAtMs) / 1000)}s ago.`;
+        } else if (hasCompletedTurn) {
+          // Legacy: use last-turn timestamp for agents with 1+ turns
+          isStalled = now - lastTs! > config.stallThresholdMs;
+          stalledSec = Math.round((now - lastTs!) / 1000);
+          stallMessage = `Agent "${name}" (${entry.type}) stalled: no turn progress for ${stalledSec}s.`;
+          logEvent = "agent_health_stalled_legacy";
+        } else {
+          // 0-turn agent past grace period — use spawn time as baseline
+          isStalled = now - createdAtMs > gracePeriodMs;
+          stalledSec = Math.round((now - createdAtMs) / 1000);
+          stallMessage =
+            `Agent "${name}" (${entry.type}) has not completed any turns since spawning ` +
+            `${stalledSec}s ago.`;
+          logEvent = "agent_health_stalled_no_turns";
+        }
 
         if (isStalled) {
           if (!notifiedStalled.has(name)) {
-            const stalledSec = Math.round((now - stallState.lastChunkAt) / 1000);
             const issue: HealthIssue = {
               type: "stalled",
               agentName: name,
               agentType: entry.type,
-              message:
-                `Agent "${name}" (${entry.type}) stalled: no stream progress for ` +
-                `${stalledSec}s (no chunk, no active tool, not waiting for mail).`,
+              message: stallMessage,
             };
             issues.push(issue);
             notifiedStalled.add(name);
             notifyOrchestrator(issue);
-            log("warn", "agent_health_stalled", { agent: name, stalledSec });
+            log("warn", logEvent, { agent: name, stalledSec });
           }
         } else {
-          notifiedStalled.delete(name);
-        }
-      } else {
-        // No IPC stall state available — fall back to last-activity timestamp
-        const lastTs = getLastActivity(name);
-        if (lastTs && now - lastTs > config.stallThresholdMs) {
-          if (!notifiedStalled.has(name)) {
-            const stalledSec = Math.round((now - lastTs) / 1000);
-            const issue: HealthIssue = {
-              type: "stalled",
-              agentName: name,
-              agentType: entry.type,
-              message:
-                `Agent "${name}" (${entry.type}) stalled: no turn activity for ${stalledSec}s.`,
-            };
-            issues.push(issue);
-            notifiedStalled.add(name);
-            notifyOrchestrator(issue);
-            log("warn", "agent_health_stalled_legacy", { agent: name, stalledSec });
-          }
-        } else if (lastTs) {
           notifiedStalled.delete(name);
         }
       }

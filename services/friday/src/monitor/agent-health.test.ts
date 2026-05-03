@@ -240,3 +240,129 @@ describe("runHealthCheck — 3-condition IPC stall detection", () => {
     }
   });
 });
+
+describe("runHealthCheck — startup grace period", () => {
+  beforeEach(() => {
+    clearNotifications();
+    clearActivity("builder-new");
+    mockListAgents.mockReturnValue([]);
+    mockMailSend.mockClear();
+  });
+
+  function makeAgentWithCreatedAt(name: string, createdAt: string) {
+    return {
+      name,
+      entry: {
+        type: "builder" as const,
+        status: "active" as const,
+        parent: "orchestrator",
+        createdAt,
+      } as any,
+    };
+  }
+
+  it("does NOT flag a 0-turn agent within the startup grace period", () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date(Date.now()).toISOString();
+      mockListAgents.mockReturnValue([makeAgentWithCreatedAt("builder-new", createdAt)]);
+
+      vi.advanceTimersByTime(20_000); // 20s — within 30s grace
+      const issues = runHealthCheck(makeConfig({
+        isAgentRunning: () => true,
+        startupGracePeriodMs: 30_000,
+      }));
+      expect(issues).toHaveLength(0);
+      expect(mockMailSend).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flags a 0-turn agent after grace period expires, using createdAt as baseline", () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date(Date.now()).toISOString();
+      mockListAgents.mockReturnValue([makeAgentWithCreatedAt("builder-new", createdAt)]);
+
+      vi.advanceTimersByTime(40_000); // 40s — past 30s grace
+      const issues = runHealthCheck(makeConfig({
+        isAgentRunning: () => true,
+        startupGracePeriodMs: 30_000,
+      }));
+      expect(issues).toHaveLength(1);
+      expect(issues[0].type).toBe("stalled");
+      expect(issues[0].message).toContain("has not completed any turns since spawning");
+      expect(mockMailSend).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("IPC stall state does not fire during grace period even with stale chunk", () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date(Date.now()).toISOString();
+      mockListAgents.mockReturnValue([makeAgentWithCreatedAt("builder-new", createdAt)]);
+
+      // Chunk was 60s stale at spawn time — IPC check alone would fire
+      const staleAt = Date.now() - 60_000;
+      vi.advanceTimersByTime(20_000); // 20s into grace period
+
+      const stallState: AgentStallState = {
+        lastChunkAt: staleAt,
+        toolCallActive: false,
+        waitingForMail: false,
+      };
+      const issues = runHealthCheck(makeConfig({
+        isAgentRunning: () => true,
+        startupGracePeriodMs: 30_000,
+        getStallState: () => stallState,
+      }));
+      expect(issues).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-notify a 0-turn stall while still stalled", () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date(Date.now()).toISOString();
+      mockListAgents.mockReturnValue([makeAgentWithCreatedAt("builder-new", createdAt)]);
+
+      vi.advanceTimersByTime(40_000); // past grace
+      runHealthCheck(makeConfig({ isAgentRunning: () => true, startupGracePeriodMs: 30_000 }));
+      mockMailSend.mockClear();
+
+      vi.advanceTimersByTime(30_000); // still no turns
+      const issues = runHealthCheck(makeConfig({ isAgentRunning: () => true, startupGracePeriodMs: 30_000 }));
+      expect(issues).toHaveLength(0);
+      expect(mockMailSend).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("1+-turn stall detection still works alongside grace period logic", () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = new Date(Date.now()).toISOString();
+      mockListAgents.mockReturnValue([makeAgentWithCreatedAt("builder-new", createdAt)]);
+
+      recordActivity("builder-new");
+      vi.advanceTimersByTime(60_000); // 60s — past stallThresholdMs
+
+      const issues = runHealthCheck(makeConfig({
+        isAgentRunning: () => true,
+        stallThresholdMs: 30_000,
+        getStallState: () => null,
+      }));
+      expect(issues).toHaveLength(1);
+      expect(issues[0].type).toBe("stalled");
+      expect(issues[0].message).not.toContain("has not completed any turns");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
