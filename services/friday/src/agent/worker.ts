@@ -8,7 +8,9 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { WebClient } from "@slack/web-api";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
+import { createSlackTools } from "./tools.js";
 import { createMailTools } from "../comms/mail-tools.js";
 import { mailCheck, mailEvents, buildMailPrompt } from "../comms/mail.js";
 import { buildLinearMcpServer } from "../linear/mcp.js";
@@ -111,7 +113,9 @@ async function runAgentLoop(
       "with `bd ready --json` and continue where you left off.";
   }
 
-  // Reconstruct MCP servers inside the worker process
+  // Reconstruct MCP servers inside the worker process.
+  // Workers run in a child_process.fork() — live objects cannot be passed over
+  // IPC. Each server is reconstructed here from env/config available in the child.
   const mailMcp = createMailTools({ callerName: agentName });
   const agentMcp = createAgentTools({
     callerName: agentName,
@@ -127,6 +131,13 @@ async function runAgentLoop(
   const linearMcp = buildLinearMcpServer();
   if (linearMcp) {
     allMcpServers[LINEAR_MCP_NAME] = linearMcp;
+  }
+
+  // Inject slack_reply (with thread_ts support) if bot token is available.
+  // This lets builders/helpers post directly to Slack and reply into connected threads.
+  const slackBotToken = process.env.SLACK_BOT_TOKEN;
+  if (slackBotToken) {
+    allMcpServers["friday-slack"] = createSlackTools(new WebClient(slackBotToken));
   }
 
   const queryOptions: Record<string, any> = {
