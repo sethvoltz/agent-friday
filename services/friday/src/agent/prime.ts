@@ -1,4 +1,4 @@
-import type { AgentType } from "@friday/shared";
+import type { AgentType, Skill } from "@friday/shared";
 import { BEADS_DIR } from "@friday/shared";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -59,6 +59,26 @@ export interface PrimeContext {
   scheduleDescription?: string;
   /** System prompt suffix (scheduled agents only) */
   systemPromptSuffix?: string;
+  /** Skills available to this agent type (auto-trigger capable, filtered by scope) */
+  skills?: Skill[];
+}
+
+function buildSkillsSection(skills: Skill[]): string {
+  const autoTrigger = skills.filter((s) => !s.disableModelInvocation);
+  if (autoTrigger.length === 0) return "";
+
+  const lines = autoTrigger.map((s) => {
+    const whenLine = s.whenToUse ? `\n  _When to use:_ ${s.whenToUse}` : "";
+    return `- **/${s.name}** — ${s.description}${whenLine}`;
+  });
+
+  return [
+    "## Available skills",
+    "",
+    "The following skills are available. When a user request matches a skill's description, invoke it by calling the Skill tool with the skill name.",
+    "",
+    ...lines,
+  ].join("\n");
 }
 
 /**
@@ -79,7 +99,11 @@ export function buildAgentSystemPrompt(ctx: PrimeContext): string {
     }
   })();
   const linear = linearProtocolForRole(ctx.agentType);
-  return linear ? `${base}\n\n${linear}` : base;
+  const withLinear = linear ? `${base}\n\n${linear}` : base;
+
+  const skillsSection =
+    ctx.skills && ctx.skills.length > 0 ? buildSkillsSection(ctx.skills) : "";
+  return skillsSection ? `${withLinear}\n\n${skillsSection}` : withLinear;
 }
 
 /**

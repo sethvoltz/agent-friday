@@ -10,6 +10,7 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { WebClient } from "@slack/web-api";
 import { buildAgentSystemPrompt, buildFirstTurnPrompt } from "./prime.js";
+import { initSkillRegistry } from "../skills/registry.js";
 import { createSlackTools } from "./tools.js";
 import { createMailTools } from "../comms/mail-tools.js";
 import { mailCheck, mailEvents, buildMailPrompt } from "../comms/mail.js";
@@ -84,6 +85,9 @@ async function runAgentLoop(
 
   currentAgentName = agentName;
 
+  const skillRegistry = initSkillRegistry();
+  const skills = skillRegistry.getAutoTriggerSkills(agentType);
+
   const systemPrompt = buildAgentSystemPrompt({
     agentName,
     agentType,
@@ -92,6 +96,7 @@ async function runAgentLoop(
     cwd,
     parent,
     workspace,
+    skills,
   });
 
   const firstTurnPrompt = buildFirstTurnPrompt({

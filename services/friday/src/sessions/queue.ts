@@ -22,6 +22,11 @@ export interface QueuedMessage {
   interrupt?: boolean;
   /** Slack thread_ts when the message arrived as a reply in an unconnected thread */
   threadTs?: string;
+  /**
+   * Skill body injected when the message is an explicit `/skill-name` invocation.
+   * Prepended to the agent prompt ahead of the user's args.
+   */
+  skillBody?: string;
 }
 
 interface ChannelQueue {
