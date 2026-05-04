@@ -17,6 +17,7 @@ import { mailCommandCitty, mailSendCmd } from "./commands/mail.js";
 import { scheduleCommandCitty } from "./commands/schedule.js";
 import { evolveCommandCitty } from "./commands/evolve.js";
 import { completionCommandCitty } from "./commands/completion.js";
+import { projectBaseCommandCitty } from "./commands/project-base.js";
 
 export const cli = defineCommand({
   meta: {
@@ -47,6 +48,7 @@ export const cli = defineCommand({
     schedule: scheduleCommandCitty,
     evolve: evolveCommandCitty,
     completion: completionCommandCitty,
+    "project-base": projectBaseCommandCitty,
   },
 });
 
