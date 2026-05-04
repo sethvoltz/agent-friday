@@ -50,19 +50,16 @@
   const weekStats = $derived(sumEntries(weekEntries));
 
   // Daily cost stacked by model + token breakdown
-  const { dailyCost, maxDailyCost, maxDailyCostNoCached, maxDailyTokens, maxDailyTokensNoCached, models, modelColors } = $derived.by(() => {
-    const dailyMap = new Map<string, { costByModel: Map<string, number>; cachedCostByModel: Map<string, number>; inputUncached: number; inputCached: number; output: number }>();
+  const { dailyCost, maxDailyCost, maxDailyTokens, maxDailyTokensNoCached, models, modelColors } = $derived.by(() => {
+    const dailyMap = new Map<string, { costByModel: Map<string, number>; inputUncached: number; inputCached: number; output: number }>();
     const modelSet = new Set<string>();
     for (const e of entries) {
       const day = new Date(e.timestamp).toLocaleDateString('en-CA'); // YYYY-MM-DD in local tz
       const model = e.model ?? 'unknown';
       modelSet.add(model);
-      if (!dailyMap.has(day)) dailyMap.set(day, { costByModel: new Map(), cachedCostByModel: new Map(), inputUncached: 0, inputCached: 0, output: 0 });
+      if (!dailyMap.has(day)) dailyMap.set(day, { costByModel: new Map(), inputUncached: 0, inputCached: 0, output: 0 });
       const d = dailyMap.get(day)!;
       d.costByModel.set(model, (d.costByModel.get(model) ?? 0) + (e.costUsd ?? 0));
-      // Approximate cached-read cost: $0.30/MTok (Sonnet cache-read rate)
-      const cachedCost = (e.cacheReadTokens * 0.3) / 1_000_000;
-      d.cachedCostByModel.set(model, (d.cachedCostByModel.get(model) ?? 0) + cachedCost);
       d.inputUncached += e.inputTokens + e.cacheCreationTokens;
       d.inputCached += e.cacheReadTokens;
       d.output += e.outputTokens;
@@ -70,30 +67,16 @@
     const models = [...modelSet].sort();
     const dailyCost = [...dailyMap.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, d]) => {
-        const costByModel = Object.fromEntries(d.costByModel);
-        const cachedCostByModel = Object.fromEntries(d.cachedCostByModel);
-        const uncachedCostByModel: Record<string, number> = {};
-        for (const model of Object.keys(costByModel)) {
-          uncachedCostByModel[model] = Math.max(0, (costByModel[model] ?? 0) - (cachedCostByModel[model] ?? 0));
-        }
-        const totalCost = [...d.costByModel.values()].reduce((s, v) => s + v, 0);
-        const totalCachedCost = [...d.cachedCostByModel.values()].reduce((s, v) => s + v, 0);
-        return {
-          day,
-          totalCost,
-          totalCachedCost,
-          totalUncachedCost: Math.max(0, totalCost - totalCachedCost),
-          costByModel,
-          uncachedCostByModel,
-          inputUncached: d.inputUncached,
-          inputCached: d.inputCached,
-          output: d.output,
-          totalTokens: d.inputUncached + d.inputCached + d.output,
-        };
-      });
+      .map(([day, d]) => ({
+        day,
+        totalCost: [...d.costByModel.values()].reduce((s, v) => s + v, 0),
+        costByModel: Object.fromEntries(d.costByModel),
+        inputUncached: d.inputUncached,
+        inputCached: d.inputCached,
+        output: d.output,
+        totalTokens: d.inputUncached + d.inputCached + d.output,
+      }));
     const maxDailyCost = Math.max(...dailyCost.map(d => d.totalCost), 0.01);
-    const maxDailyCostNoCached = Math.max(...dailyCost.map(d => d.totalUncachedCost), 0.01);
     const maxDailyTokens = Math.max(...dailyCost.map(d => d.totalTokens), 1);
     const maxDailyTokensNoCached = Math.max(...dailyCost.map(d => d.inputUncached + d.output), 1);
     const palette = [
@@ -106,7 +89,7 @@
     ];
     const modelColors: Record<string, string> = {};
     models.forEach((m, i) => { modelColors[m] = palette[i % palette.length]; });
-    return { dailyCost, maxDailyCost, maxDailyCostNoCached, maxDailyTokens, maxDailyTokensNoCached, models, modelColors };
+    return { dailyCost, maxDailyCost, maxDailyTokens, maxDailyTokensNoCached, models, modelColors };
   });
 
   // Calendar bucket helpers (separate from rolling-window stat cards above)
@@ -374,12 +357,12 @@
             <span class="bar-label">{day.day.slice(5)}</span>
             <div class="bar-track">
               {#each models as model}
-                {@const seg = showCachedTokens ? (day.costByModel[model] ?? 0) : (day.uncachedCostByModel[model] ?? 0)}
+                {@const seg = day.costByModel[model] ?? 0}
                 {#if seg > 0}
                   <Tooltip.Root>
                     <Tooltip.Trigger
                       class="bar-fill-segment"
-                      style="width: {(seg / (showCachedTokens ? maxDailyCost : maxDailyCostNoCached)) * 100}%; background: {modelColors[model]}"
+                      style="width: {(seg / maxDailyCost) * 100}%; background: {modelColors[model]}"
                     />
                     <Tooltip.Portal>
                       <Tooltip.Content class="segment-tooltip" sideOffset={6}>
@@ -391,7 +374,7 @@
                 {/if}
               {/each}
             </div>
-            <span class="bar-value">{fmtCost(showCachedTokens ? day.totalCost : day.totalUncachedCost)}</span>
+            <span class="bar-value">{fmtCost(day.totalCost)}</span>
             <div class="bar-track token-track">
               {#if day.inputUncached > 0}
                 <Tooltip.Root>
