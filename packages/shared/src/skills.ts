@@ -25,6 +25,10 @@ export interface Skill {
 const _dir = dirname(fileURLToPath(import.meta.url));
 export const BUILTIN_SKILLS_DIR = join(_dir, "..", "skills");
 
+// Path to the project-base template directory.
+// At runtime: packages/shared/dist/skills.js → ../project-base/ = packages/shared/project-base/
+export const BUILTIN_PROJECT_BASE_DIR = join(_dir, "..", "project-base");
+
 // ── Frontmatter parser ────────────────────────────────────────────────────
 
 function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
