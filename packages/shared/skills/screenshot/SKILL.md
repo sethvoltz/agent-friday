@@ -1,12 +1,12 @@
 ---
-description: Take a screenshot of a running web app and post it to Slack. Handles dev server detection, Playwright-based capture, and Slack upload automatically.
-when_to_use: When the user asks to screenshot the app, capture a UI state, share what the app looks like, or verify a visual change. Also use after implementing a UI feature when you want to show the result.
+description: Take a screenshot of a running web app and deliver it — to Slack for interactive threads, or embedded in a PR description as async visual evidence. Handles dev server detection, Playwright-based capture, and delivery automatically.
+when_to_use: When the user asks to screenshot the app, capture a UI state, share what the app looks like, or verify a visual change. Also use after implementing a UI feature when you want to show the result — via Slack if in a thread, or via the PR description if delivering async evidence.
 disable-model-invocation: false
 user-invocable: true
 scope: [builder]
 ---
 
-Capture a screenshot of the web app and post it to Slack.
+Capture a screenshot of the web app and deliver it to Slack or embed it in a PR description.
 
 ## Steps
 
@@ -18,7 +18,7 @@ Read `package.json` in the repo root to discover how to boot the app. Do not ass
 node -e "const s=require('./package.json').scripts||{}; const keys=['dev','start','serve','develop','preview']; const k=keys.find(k=>s[k]); console.log(k?s[k]:'')"
 ```
 
-If no matching script is found, check `package.json` of each workspace package (look in `packages/*/package.json` and `apps/*/package.json`) for the same keys. Pick the first match and note the package directory.
+If no matching script is found, identify the GUI package from your task context — check the package directory you were working in, or the package name mentioned in the task brief. Do not auto-scan workspace globs.
 
 If still not found, stop and report — you cannot boot the app without knowing the command.
 
@@ -79,7 +79,13 @@ node /tmp/pw-screenshot-$$.mjs "$TARGET_URL" "$SCREENSHOT_PATH"
 
 If you need to interact with the app first (navigate to a specific route, click a button, fill a form), add those `page.*` calls before `page.screenshot(...)`.
 
-### 5. Upload to Slack
+### 5. Deliver the screenshot
+
+**Choose the right delivery mode:**
+- **5a — Slack:** use when you are in an active Slack thread or the user expects an interactive response
+- **5b — PR description:** use when delivering async evidence on a pull request (visual proof of a UI change, before/after comparison, or reviewer reference)
+
+### 5a. Upload to Slack
 
 Use the two-step Slack upload API. You need:
 - `SLACK_BOT_TOKEN` — must be set in the environment
@@ -124,6 +130,40 @@ COMPLETE_RESPONSE=$(curl -s -X POST "https://slack.com/api/files.completeUploadE
 echo "$COMPLETE_RESPONSE" | node -e "process.stdin.setEncoding('utf8'); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{const r=JSON.parse(d); console.log(r.ok?'Upload complete':'Error: '+r.error)})"
 ```
 
+### 5b. Embed in PR description
+
+Upload the screenshot to GitHub to get a CDN URL, then embed it in the PR body using `gh pr edit`.
+
+**Step A — resolve the PR number and repo:**
+
+```bash
+PR_NUMBER=$(gh pr view --json number -q .number)
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+FILENAME="screenshot-$(date +%Y%m%d-%H%M%S).png"
+```
+
+**Step B — upload the file and get the GitHub CDN URL:**
+
+```bash
+CDN_URL=$(gh api \
+  -X POST \
+  -H "Content-Type: image/png" \
+  -H "Accept: application/vnd.github+json" \
+  --input "$SCREENSHOT_PATH" \
+  "/repos/$REPO/issues/$PR_NUMBER/assets?name=$FILENAME" \
+  --jq '.url')
+```
+
+Check that `CDN_URL` is non-empty before continuing. If the response is an error, report it and stop.
+
+**Step C — append the image to the PR body:**
+
+```bash
+CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body)
+
+gh pr edit "$PR_NUMBER" --body "$(printf '%s\n\n---\n\n**Screenshot**\n\n![screenshot](%s)' "$CURRENT_BODY" "$CDN_URL")"
+```
+
 ### 6. Cleanup
 
 Always clean up, even if an earlier step failed:
@@ -144,3 +184,4 @@ rm -f "$SCREENSHOT_PATH" /tmp/devserver-$$.log /tmp/pw-screenshot-$$.mjs
 - **Specific routes:** If the user asks to screenshot a particular page, append the path to the base URL (e.g. `http://localhost:3742/dashboard`).
 - **Thread uploads:** If you are connected to a Slack thread, pass `thread_ts` in the `completeUploadExternal` body to post the image as a thread reply rather than a new message.
 - **`SLACK_BOT_TOKEN` missing:** If the env var is not set, report it clearly. Do not attempt the upload.
+- **PR delivery outside a PR context:** If you're asked to embed in a PR description but there is no open PR for the current branch, fall back to Slack delivery and note that no PR was found.
