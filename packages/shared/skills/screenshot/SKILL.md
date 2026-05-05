@@ -1,26 +1,31 @@
 ---
-description: Take a screenshot of a running web app and post it to Slack. Handles dev server detection, Playwright-based capture, and Slack upload automatically.
-when_to_use: When the user asks to screenshot the app, capture a UI state, share what the app looks like, or verify a visual change. Also use after implementing a UI feature when you want to show the result.
+description: Take a screenshot of a running web app and deliver it — either to Slack or embedded in a PR description. Handles dev server detection, Playwright-based capture, and delivery automatically.
+when_to_use: When the user asks to screenshot the app, capture a UI state, verify a visual change, or share what the app looks like. Use Slack delivery when in an interactive session. Use PR description delivery when adding visual evidence to an async code review or when there is no active Slack thread.
 disable-model-invocation: false
 user-invocable: true
 scope: [builder]
 ---
 
-Capture a screenshot of the web app and post it to Slack.
+Capture a screenshot of the web app and deliver it to Slack or a PR description.
+
+## Choose a delivery mode
+
+- **Slack** — use when you are in an active Slack thread and want to share the screenshot immediately in the conversation.
+- **PR description** — use when you have an open PR and want to embed the screenshot as visual evidence for async review. Prefer this when there is no active thread or the context is code review.
 
 ## Steps
 
-### 1. Detect the dev server command
+### 1. Identify the target package and dev server command
 
-Read `package.json` in the repo root to discover how to boot the app. Do not assume a framework.
+Identify which package contains the GUI you're demonstrating based on your task context — the files you modified and the component you built. **Do not auto-scan workspace packages.** In a monorepo, multiple packages may have dev scripts; picking the wrong one captures the wrong UI. If the target is ambiguous from your task context, ask the user before proceeding.
+
+Once you know the target directory, read its `package.json` to find the dev server command:
 
 ```bash
 node -e "const s=require('./package.json').scripts||{}; const keys=['dev','start','serve','develop','preview']; const k=keys.find(k=>s[k]); console.log(k?s[k]:'')"
 ```
 
-If no matching script is found, check `package.json` of each workspace package (look in `packages/*/package.json` and `apps/*/package.json`) for the same keys. Pick the first match and note the package directory.
-
-If still not found, stop and report — you cannot boot the app without knowing the command.
+If no matching script is found, stop and report — you cannot boot the app without knowing the command.
 
 ### 2. Start the dev server on an alternate port
 
@@ -79,7 +84,11 @@ node /tmp/pw-screenshot-$$.mjs "$TARGET_URL" "$SCREENSHOT_PATH"
 
 If you need to interact with the app first (navigate to a specific route, click a button, fill a form), add those `page.*` calls before `page.screenshot(...)`.
 
-### 5. Upload to Slack
+### 5. Deliver the screenshot
+
+Choose one delivery mode based on context. Slack for interactive sessions; PR description for async review.
+
+#### 5a. Post to Slack
 
 Use the two-step Slack upload API. You need:
 - `SLACK_BOT_TOKEN` — must be set in the environment
@@ -124,6 +133,44 @@ COMPLETE_RESPONSE=$(curl -s -X POST "https://slack.com/api/files.completeUploadE
 echo "$COMPLETE_RESPONSE" | node -e "process.stdin.setEncoding('utf8'); let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{const r=JSON.parse(d); console.log(r.ok?'Upload complete':'Error: '+r.error)})"
 ```
 
+#### 5b. Add to PR description
+
+Upload the screenshot as a GitHub asset to get a CDN URL, then append a Markdown image block to the PR body. The image will be visible to anyone with repo access without requiring Slack credentials.
+
+**Step A — get repo and PR context:**
+
+```bash
+OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO=$(gh repo view --json name --jq '.name')
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+**Step B — upload the screenshot as a GitHub asset:**
+
+```bash
+UPLOAD_RESPONSE=$(gh api \
+  -X POST \
+  "https://uploads.github.com/repos/$OWNER/$REPO/issues/$PR_NUMBER/assets" \
+  -H "Content-Type: image/png" \
+  --input "$SCREENSHOT_PATH")
+
+IMAGE_URL=$(echo "$UPLOAD_RESPONSE" | jq -r '.url // empty')
+```
+
+Check that `IMAGE_URL` is non-empty. If the upload failed (e.g. no open PR), fall back to Slack delivery if a thread is active, or report and stop.
+
+**Step C — append the screenshot section to the PR body:**
+
+```bash
+CURRENT_BODY=$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+NEW_BODY=$(printf '%s\n\n## Screenshot\n\n![Screenshot %s](%s)\n' \
+  "$CURRENT_BODY" "$TIMESTAMP" "$IMAGE_URL")
+
+gh pr edit "$PR_NUMBER" --body "$NEW_BODY"
+```
+
 ### 6. Cleanup
 
 Always clean up, even if an earlier step failed:
@@ -139,8 +186,9 @@ rm -f "$SCREENSHOT_PATH" /tmp/devserver-$$.log /tmp/pw-screenshot-$$.mjs
 
 ## Notes
 
+- **Choosing delivery mode:** Prefer Slack when in an interactive session — the image appears immediately in the conversation. Prefer PR description when handing off visual evidence for review — it stays with the PR and is visible without Slack access.
 - **Port conflicts:** If port 3742 is already in use, try 3743, 3744. Check with `lsof -ti:3742` first.
 - **Auth-gated routes:** If the target URL redirects to a login page, add Playwright steps to authenticate before screenshotting.
 - **Specific routes:** If the user asks to screenshot a particular page, append the path to the base URL (e.g. `http://localhost:3742/dashboard`).
-- **Thread uploads:** If you are connected to a Slack thread, pass `thread_ts` in the `completeUploadExternal` body to post the image as a thread reply rather than a new message.
-- **`SLACK_BOT_TOKEN` missing:** If the env var is not set, report it clearly. Do not attempt the upload.
+- **Thread uploads (Slack):** If you are connected to a Slack thread, pass `thread_ts` in the `completeUploadExternal` body to post the image as a thread reply rather than a new message.
+- **`SLACK_BOT_TOKEN` missing:** If the env var is not set, report it clearly. Do not attempt the Slack upload — switch to PR description delivery if a PR is open.
